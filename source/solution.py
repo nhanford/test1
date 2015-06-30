@@ -11,7 +11,7 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-import sys,os,re,pyroute2,daemon,subprocess,math
+import sys,os,re,subprocess,math
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
