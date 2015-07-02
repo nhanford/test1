@@ -11,14 +11,14 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,math
+import sys,os,re,subprocess,math,socket,sched,time,threading
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
 __all__ = []
 __version__ = 0.1
 __date__ = '2015-06-22'
-__updated__ = '2015-06-29'
+__updated__ = '2015-07-01'
 
 DEBUG = 0
 TESTRUN = 0
@@ -105,7 +105,21 @@ def setaffinity(affy,numcpus):
     return
 
 def getlinerate(iface):
+    p = subprocess.Popen(["ethtool",iface], stdout=subprocess.PIPE)
+    out,err = p.communicate()
+    speed = re.search('.+Speed:.+',out)
+    speed = re.sub('.+Speed:\s','',speed.group(0))
+    speed = re.sub('Mb/s','',speed)
+    return speed
 
+def throttleincoming(iface,linerate):
+    pass
+
+def pollconnections(iface):
+    pass
+
+def throttleoutgoing(connection):
+    pass
 
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
@@ -151,6 +165,9 @@ USAGE
         affinity = pollaffinity(irqlist)
         print(affinity)
         setaffinity(affinity,numcpus)
+        linerate = getlinerate(interface)
+        print linerate
+
 
 if __name__ == "__main__":
     if DEBUG:
