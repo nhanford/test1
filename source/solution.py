@@ -12,6 +12,7 @@ It defines classes_and_methods
 '''
 
 import sys,os,re,subprocess,math,socket,sched,time,threading
+from pyroute2 import IPRoute
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
@@ -41,7 +42,7 @@ def checkibalance():
         print "irqbalance is off\n"
         return True
     else:
-        print "Please stop irqblance with \n [sudo] service irqbalanc stop\n"
+        print "Please stop irqblance with \n [sudo] service irqbalance stop\n"
         return False
 
 def pollcpu():
@@ -112,13 +113,18 @@ def getlinerate(iface):
     speed = re.sub('Mb/s','',speed)
     return speed
 
-def throttleincoming(iface,linerate):
-    pass
+def throttleoutgoing(iface,linerate):
+    ip = IPRoute()
+    interface = ip.link_lookup(ifname=iface)[0]
+    ip.tc('del','htb',interface,0x10000, default=0x200000)
+    ip.tc('add','htb',interface,0x10000, default=0x200000)
+    ip.tc('add-class','htb',interface,0x10001,parent=0x10000,rate=linerate+'mbit',burst=1024*6)
+    return
 
 def pollconnections(iface):
     pass
 
-def throttleoutgoing(connection):
+def throttleincoming(connection):
     pass
 
 def main(argv=None): # IGNORE:C0111
@@ -128,7 +134,6 @@ def main(argv=None): # IGNORE:C0111
         argv = sys.argv
     else:
         sys.argv.extend(argv)
-
     program_name = os.path.basename(sys.argv[0])
     program_version = "v%s" % __version__
     program_build_date = str(__updated__)
@@ -167,6 +172,8 @@ USAGE
         setaffinity(affinity,numcpus)
         linerate = getlinerate(interface)
         print linerate
+        if(int(linerate)<=10000):
+            throttleoutgoing(interface,linerate)
 
 
 if __name__ == "__main__":
