@@ -11,8 +11,7 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,math,socket,sched,time,threading
-from pyroute2 import IPRoute
+import sys,os,re,subprocess,math,socket,sched,time,threading,sqlite3
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
@@ -33,7 +32,10 @@ class CLIError(Exception):
         return self.msg
     def __unicode__(self):
         return self.msg
-
+def database():
+    conn = sqlite3.connect(connections.db)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
 #Here are the functions that poll the proc filesystem, etc.
 def checkibalance():
     p = subprocess.Popen(["service","irqbalance","status"], stdout=subprocess.PIPE)
@@ -114,15 +116,11 @@ def getlinerate(iface):
     return speed
 
 def throttleoutgoing(iface,linerate):
-    ip = IPRoute()
-    interface = ip.link_lookup(ifname=iface)[0]
-    ip.tc('del','htb',interface,0x10000, default=0x200000)
-    ip.tc('add','htb',interface,0x10000, default=0x200000)
-    ip.tc('add-class','htb',interface,0x10001,parent=0x10000,rate=linerate+'mbit',burst=1024*6)
-    return
+    pass
 
 def pollconnections(iface):
-    pass
+    p = subprocess.Popen(["lsof -i :2811"])
+    out,err = p.communicate()
 
 def throttleincoming(connection):
     pass
