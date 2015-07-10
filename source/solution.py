@@ -33,9 +33,11 @@ class CLIError(Exception):
     def __unicode__(self):
         return self.msg
 def database():
-    conn = sqlite3.connect(connections.db)
+    conn = sqlite3.connect('connections.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
+    conn.commit()
+    conn.close()
 #Here are the functions that poll the proc filesystem, etc.
 def checkibalance():
     p = subprocess.Popen(["service","irqbalance","status"], stdout=subprocess.PIPE)
@@ -119,8 +121,9 @@ def throttleoutgoing(iface,linerate):
     pass
 
 def pollconnections(iface):
-    p = subprocess.Popen(["lsof -i :2811"])
+    p = subprocess.Popen(["lsof"," -i :2811"])
     out,err = p.communicate()
+    return
 
 def throttleincoming(connection):
     pass
@@ -172,7 +175,8 @@ USAGE
         print linerate
         if(int(linerate)<=10000):
             throttleoutgoing(interface,linerate)
-
+        database()
+        pollconnections(interface)
 
 if __name__ == "__main__":
     if DEBUG:
