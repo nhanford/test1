@@ -144,9 +144,9 @@ def throttleoutgoing(iface,linerate):
     pass
 
 def pollconnections(iface):
-    p = subprocess.Popen(['lsof',' -i :2811'])
-    out,err = p.communicate()
-    return
+    lsof = subprocess.check_output(['lsof','-i'])
+    lsof =
+    return lsof
 
 def throttleincoming(connection):
     pass
