@@ -32,13 +32,6 @@ class CLIError(Exception):
         return self.msg
     def __unicode__(self):
         return self.msg
-def database():
-    conn = sqlite3.connect('connections.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
-    conn.commit()
-    conn.close()
-    return
 #Here are the functions that poll the proc filesystem, etc.
 def checkibalance():
     p = subprocess.Popen(['service','irqbalance','status'], stdout=subprocess.PIPE)
@@ -130,22 +123,20 @@ def setperformance(numcpus):
     return
 
 def getlinerate(iface):
-    p = subprocess.Popen(['ethtool',iface], stdout=subprocess.PIPE)
-    out,err = p.communicate()
+    out = subprocess.check_output(['ethtool',iface])
     speed = re.search('.+Speed:.+',out)
     speed = re.sub('.+Speed:\s','',speed.group(0))
     speed = re.sub('Mb/s','',speed)
     if 'Unknown' in speed:
-        'Line rate for this interface is unknown: you probably need to enable it.'
+        print 'Line rate for this interface is unknown: you probably need to enable it.'
         exit()
-        return speed
+    return speed
 
 def throttleoutgoing(iface,linerate):
     pass
 
 def pollconnections(iface):
     lsof = subprocess.check_output(['lsof','-i'])
-    lsof =
     return lsof
 
 def throttleincoming(connection):
@@ -187,6 +178,10 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
+        conn = sqlite3.connect('connections.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
+        conn.commit()
     if checkibalance():
         numcpus = pollcpu()
         print 'The number of cpus is:', numcpus
@@ -197,9 +192,7 @@ USAGE
         linerate = getlinerate(interface)
         print linerate
         throttleoutgoing(interface,linerate)
-        database()
-        pollconnections(interface)
-
+        print pollconnections(interface)
 
 if __name__ == '__main__':
     if DEBUG:
