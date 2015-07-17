@@ -178,10 +178,10 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
-        conn = sqlite3.connect('connections.db')
-        c = conn.cursor()
-        c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
-        conn.commit()
+    conn = sqlite3.connect('connections.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
+    conn.commit()
     if checkibalance():
         numcpus = pollcpu()
         print 'The number of cpus is:', numcpus
