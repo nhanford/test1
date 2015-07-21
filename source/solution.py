@@ -34,8 +34,7 @@ class CLIError(Exception):
         return self.msg
 #Here are the functions that poll the proc filesystem, etc.
 def checkibalance():
-    p = subprocess.Popen(['service','irqbalance','status'], stdout=subprocess.PIPE)
-    out,err = p.communicate()
+    out = subprocess.check_output((['service','irqbalance','status']))
     if 'stop' in out or 'inactive' in out:
         print 'irqbalance is off\n'
         return True
@@ -136,8 +135,9 @@ def throttleoutgoing(iface,linerate):
     pass
 
 def pollconnections(iface):
-    lsof = subprocess.check_output(['lsof','-i'])
-    return lsof
+    out = subprocess.check_output(['ss','-i','-t'])
+    out = re.sub('\A\w+\s+\w+.+\n','',out)
+    return out
 
 def throttleincoming(connection):
     pass
@@ -180,9 +180,13 @@ USAGE
         return 2
     conn = sqlite3.connect('connections.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE conns (command text, pid int, user text, fd text, type text, device text, size text, node text, name text)''')
+    c.execute('''CREATE TABLE conns (sourceip text, destip text, sourceport int, destport int, iface text, avgrtt real, loss real)''')
     conn.commit()
-    if checkibalance():
+    try:
+        ibalance = checkibalance()
+    except subprocess.CalledProcessError:
+        ibalance = True
+    if ibalance:
         numcpus = pollcpu()
         print 'The number of cpus is:', numcpus
         irqlist = pollirq(interface)
