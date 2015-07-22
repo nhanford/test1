@@ -180,37 +180,6 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
-    conn = sqlite3.connect('connections.db')
-    c = conn.cursor()
-    try:
-        c.execute('''DROP TABLE conns''')
-    except sqlite3.Error:
-        print('Table doesn\'t exist; Creating table...')
-    c.execute('''CREATE TABLE conns (state text,
-        recvq       int,
-        sendq       int,
-        sourceip    text    NOT NULL,
-        sourceport  text    NOT NULL,
-        destip      text    NOT NULL,
-        destport    text    NOT NULL,
-        iface       text,
-        tcp         text,
-        wscaleavg   int,
-        wscalemax   int,
-        rto         int,
-        rttavg      real,
-        rttmax      real,
-        ato         int,
-        mss         int,
-        cwnd        int,
-        ssthresh    int,
-        sendrate    real,
-        pacrate     real,
-        retrans     int,
-        rcvrtt      int,
-        rcvspace    int,
-        PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-    conn.commit()
     ibalance = False
     try:
         ibalance = checkibalance()
@@ -221,21 +190,8 @@ USAGE
         print 'The number of cpus is:', numcpus
         irqlist = pollirq(interface)
         affinity = pollaffinity(irqlist)
-        print affinity
+        print(affinity)
         setaffinity(affinity,numcpus)
-        linerate = getlinerate(interface)
-        throttleoutgoing(interface,linerate)
-        connections = pollconnections(interface)
-        print connections
-        for connection in connections:
-            connection = connection.strip()
-            connection = connection.split()
-            print connection
-            j=0
-            if 'ESTAB' in connection[0]:
-                for i in connection:
-                    print i,j
-                    j += 1
 
 if __name__ == '__main__':
     if DEBUG:
