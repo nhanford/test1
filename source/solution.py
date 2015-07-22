@@ -199,7 +199,6 @@ USAGE
         wscalemax   int,
         rto         int,
         rttavg      real,
-        rttmax      real,
         ato         int,
         mss         int,
         cwnd        int,
@@ -229,13 +228,26 @@ USAGE
         print connections
         for connection in connections:
             connection = connection.strip()
-            connection = connection.split()
-            print connection
-            j=0
-            if 'ESTAB' in connection[0]:
-                for i in connection:
-                    print i,j
-                    j += 1
+            ordered = re.sub(':|,|/|Mbps',' ',connection)
+            ordered = connection.split()
+            print 'State is: ',ordered[0]
+            ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
+            if ips:
+                print 'Source IP is:',ips[0]
+                print 'Destination IP is:', ips[1]
+            else:
+                print 'Source IP is: None'
+                print 'Destination IP is None'
+            ports = re.findall('\d:\w+',connection)
+            if ports:
+                print 'Source port is:',ports[0][2:]
+                print 'Destination port is',ports[1][2:]
+            else:
+                print 'Source port is: None'
+                print 'Destination port is None'
+            #rtt: first value is the average rtt; the second value is the variance
+            rtt = re.search('rtt:\d+[.]?\d+',connection).group(0)
+            print 'Average RTT is: ',rtt[4:]
 
 if __name__ == '__main__':
     if DEBUG:
