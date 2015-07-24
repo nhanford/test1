@@ -34,13 +34,16 @@ class CLIError(Exception):
         return self.msg
 #Here are the functions that poll the proc filesystem, etc.
 def checkibalance():
-    out = subprocess.check_output((['service','irqbalance','status']))
+    try:
+        out = subprocess.check_output((['service','irqbalance','status']))
+    except subprocess.CalledProcessError:
+        print 'irqbalance isn\'t installed'
+        return 0
     if 'stop' in out or 'inactive' in out:
         print 'irqbalance is off\n'
-        return True
-    else:
-        print 'Please stop irqblance with \n [sudo] service irqbalance stop\n'
-        return False
+        return 0
+    print 'Stopping irqbalance'
+    return subprocess.check_call('service','irqbalance','stop')
 
 def pollcpu():
     try:
@@ -131,8 +134,9 @@ def getlinerate(iface):
         exit()
     return speed
 
-def throttleoutgoing(iface,linerate):
-    pass
+def throttleoutgoing(ipaddr,iface,speedclass='1:1'):
+    success = subprocess.check_call('tc','filter add dev '+iface+' parent 1: protocol ip prio 1 u32 match ip dst '+ipaddr+' flowid '+speedclass)
+    return success
 
 def pollconnections(iface):
     out = subprocess.check_output(['ss','-i','-t'])
@@ -141,8 +145,24 @@ def pollconnections(iface):
     out = out.splitlines()
     return out
 
-def throttleincoming(connection):
-    pass
+def databaseCreate()
+    conn = sqlite3.connect('connections.db')
+    c = conn.cursor()
+    try:
+        c.execute('''DROP TABLE conns''')
+    except sqlite3.Error:
+        print('Table doesn\'t exist; Creating table...')
+    c.execute('''CREATE TABLE conns (
+        sourceip    text    NOT NULL,
+        sourceport  text    NOT NULL,
+        destip      text    NOT NULL,
+        destport    text    NOT NULL,
+        rttavg      real,
+        sendrate    real,
+        retrans     int,
+        PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+    conn.commit()
+    return conn,c
 
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
@@ -180,74 +200,86 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
-    conn = sqlite3.connect('connections.db')
-    c = conn.cursor()
-    try:
-        c.execute('''DROP TABLE conns''')
-    except sqlite3.Error:
-        print('Table doesn\'t exist; Creating table...')
-    c.execute('''CREATE TABLE conns (state text,
-        recvq       int,
-        sendq       int,
-        sourceip    text    NOT NULL,
-        sourceport  text    NOT NULL,
-        destip      text    NOT NULL,
-        destport    text    NOT NULL,
-        iface       text,
-        tcp         text,
-        wscaleavg   int,
-        wscalemax   int,
-        rto         int,
-        rttavg      real,
-        ato         int,
-        mss         int,
-        cwnd        int,
-        ssthresh    int,
-        sendrate    real,
-        pacrate     real,
-        retrans     int,
-        rcvrtt      int,
-        rcvspace    int,
-        PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+
+    #c.execute('''CREATE TABLE conns (state text,
+    #    recvq       int,
+    #    sendq       int,
+    #    sourceip    text    NOT NULL,
+    #    sourceport  text    NOT NULL,
+    #    destip      text    NOT NULL,
+    #    destport    text    NOT NULL,
+    #    iface       text,
+    #    tcp         text,
+    #    wscaleavg   int,
+    #    wscalemax   int,
+    #    rto         int,
+    #    rttavg      real,
+    #    ato         int,
+    #    mss         int,
+    #    cwnd        int,
+    #    ssthresh    int,
+    #    sendrate    real,
+    #    pacrate     real,
+    #    retrans     int,
+    #    rcvrtt      int,
+    #    rcvspace    int,
+    #    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+
+    ibalance = 1
+    ibalance = checkibalance()
+    if ibalance != 0:
+        exit()
+    numcpus = pollcpu()
+    #print 'The number of cpus is:', numcpus
+    irqlist = pollirq(interface)
+    affinity = pollaffinity(irqlist)
+    #print affinity
+    setaffinity(affinity,numcpus)
+    linerate = getlinerate(interface)
+    throttleoutgoing(interface,'0.0.0.0/0')
+    connections = pollconnections(interface)
+    print connections
+    for connection in connections:
+        connection = connection.strip()
+        ordered = re.sub(':|,|/|Mbps',' ',connection)
+        ordered = connection.split()
+        #print 'State is: ',ordered[0]
+        ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
+        #if ips:
+        #    print 'Source IP is:',ips[0]
+        #    print 'Destination IP is:', ips[1]
+        #else:
+        #    print 'Source IP is: None'
+        #    print 'Destination IP is None'
+        ports = re.findall('\d:\w+',connection)
+        #if ports:
+        #    print 'Source port is:',ports[0][2:]
+        #    print 'Destination port is',ports[1][2:]
+        #else:
+        #    print 'Source port is: None'
+        #    print 'Destination port is None'
+        #rtt: first value is the average rtt; the second value is the variance
+        rtt = re.search('rtt:\d+[.]?\d+',connection)
+        if rtt:
+            rtt = rtt.group(0)[4:]
+        #print 'Average RTT is:',rtt
+        retrans = re.search('retrans:\d+\/\d+',connection)
+        if retrans:
+            retrans = retrans.group(0)
+            retrans = re.sub('retrans:\d+\/','',retrans)
+        #    print 'Number of retransmits is:',retrans
+        else:
+            print 'Number of retransmits is not available'
+        sendrate = re.search('send \d+.\d+',connection)
+        sendrate = sendrate.group(0)[5:]
+        if len(ips) > 1 and len(ports) > 1 and rtt and retrans and sendrate:
+        #Assemble Query String
+            query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
+            print query
+            c.execute(query)
     conn.commit()
-    ibalance = False
-    try:
-        ibalance = checkibalance()
-    except subprocess.CalledProcessError:
-        ibalance = True
-    if ibalance:
-        numcpus = pollcpu()
-        print 'The number of cpus is:', numcpus
-        irqlist = pollirq(interface)
-        affinity = pollaffinity(irqlist)
-        print affinity
-        setaffinity(affinity,numcpus)
-        linerate = getlinerate(interface)
-        throttleoutgoing(interface,linerate)
-        connections = pollconnections(interface)
-        print connections
-        for connection in connections:
-            connection = connection.strip()
-            ordered = re.sub(':|,|/|Mbps',' ',connection)
-            ordered = connection.split()
-            print 'State is: ',ordered[0]
-            ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
-            if ips:
-                print 'Source IP is:',ips[0]
-                print 'Destination IP is:', ips[1]
-            else:
-                print 'Source IP is: None'
-                print 'Destination IP is None'
-            ports = re.findall('\d:\w+',connection)
-            if ports:
-                print 'Source port is:',ports[0][2:]
-                print 'Destination port is',ports[1][2:]
-            else:
-                print 'Source port is: None'
-                print 'Destination port is None'
-            #rtt: first value is the average rtt; the second value is the variance
-            rtt = re.search('rtt:\d+[.]?\d+',connection).group(0)
-            print 'Average RTT is: ',rtt[4:]
+    c.execute('SELECT * FROM conns')
+    print(c.fetchall())
 
 if __name__ == '__main__':
     if DEBUG:
