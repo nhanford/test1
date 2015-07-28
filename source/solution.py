@@ -20,6 +20,8 @@ __version__ = 0.1
 __date__ = '2015-06-22'
 __updated__ = '2015-07-08'
 
+SPEEDCLASSES = [(100,'1:100'),(1000,'1:1000'),(5000,'1:5000'),(10000,'1:10000'),(40000,'1:40000'),(100000,'1:100000')]
+
 DEBUG = 0
 TESTRUN = 0
 
@@ -34,16 +36,15 @@ class CLIError(Exception):
         return self.msg
 #Here are the functions that poll the proc filesystem, etc.
 def checkibalance():
-    try:
-        out = subprocess.check_output((['service','irqbalance','status']))
-    except subprocess.CalledProcessError:
-        print 'irqbalance isn\'t installed'
-        return 0
+    out = subprocess.check_output(['service','irqbalance','status'])
     if 'stop' in out or 'inactive' in out:
         print 'irqbalance is off\n'
+        return True
+    try:
+        subprocess.check_call(['service','irqbalance','stop'])
+    except CalledProcessError:
         return 0
-    print 'Stopping irqbalance'
-    return subprocess.check_call('service','irqbalance','stop')
+    return 1
 
 def pollcpu():
     try:
@@ -134,8 +135,33 @@ def getlinerate(iface):
         exit()
     return speed
 
-def throttleoutgoing(ipaddr,iface,speedclass='1:1'):
-    success = subprocess.check_call('tc','filter add dev '+iface+' parent 1: protocol ip prio 1 u32 match ip dst '+ipaddr+' flowid '+speedclass)
+def setthrottles(iface):
+    try:
+        subprocess.check_call(['tc','qdisc','del','dev',iface,'root'])
+    except OSError:
+        print 'No running qdisc on interface'
+    except CalledProcessError:
+        print 'Could not interface with os to initialize tc settings.'
+        return
+    try:
+        subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root htb'])
+    except:
+        print 'Could not interface with os to initialize tc settings.'
+        return
+    for speedclass in SPEEDCLASSES:
+        try:
+            subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid ',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
+        except:
+            print 'Could not interface with os to initialize tc settings.'
+            return
+    return
+
+def parseconnections(connections):
+    pass
+    #return an iterator or a list of connections, whatever is easier in sqlite
+
+def throttleoutgoing(ipaddr,iface,speedclass):
+    success = subprocess.check_call('tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr,'/32','flowid',speedclass)
     return success
 
 def pollconnections(iface):
@@ -144,25 +170,6 @@ def pollconnections(iface):
     out = re.sub('\n\t','',out)
     out = out.splitlines()
     return out
-
-def databaseCreate()
-    conn = sqlite3.connect('connections.db')
-    c = conn.cursor()
-    try:
-        c.execute('''DROP TABLE conns''')
-    except sqlite3.Error:
-        print('Table doesn\'t exist; Creating table...')
-    c.execute('''CREATE TABLE conns (
-        sourceip    text    NOT NULL,
-        sourceport  text    NOT NULL,
-        destip      text    NOT NULL,
-        destport    text    NOT NULL,
-        rttavg      real,
-        sendrate    real,
-        retrans     int,
-        PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-    conn.commit()
-    return conn,c
 
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
@@ -200,7 +207,12 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
-
+    conn = sqlite3.connect('connections.db')
+    c = conn.cursor()
+    try:
+        c.execute('''DROP TABLE conns''')
+    except sqlite3.Error:
+        print('Table doesn\'t exist; Creating table...')
     #c.execute('''CREATE TABLE conns (state text,
     #    recvq       int,
     #    sendq       int,
@@ -224,21 +236,30 @@ USAGE
     #    rcvrtt      int,
     #    rcvspace    int,
     #    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-
-    ibalance = 1
+    c.execute('''CREATE TABLE conns (
+        sourceip    text    NOT NULL,
+        sourceport  text    NOT NULL,
+        destip      text    NOT NULL,
+        destport    text    NOT NULL,
+        rttavg      real,
+        sendrate    real,
+        retrans     int,
+        PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+    conn.commit()
     ibalance = checkibalance()
-    if ibalance != 0:
+    if !ibalance:
+        print "Unable to disable irqbalance"
         exit()
     numcpus = pollcpu()
-    #print 'The number of cpus is:', numcpus
+    print 'The number of cpus is:', numcpus
     irqlist = pollirq(interface)
     affinity = pollaffinity(irqlist)
     #print affinity
     setaffinity(affinity,numcpus)
     linerate = getlinerate(interface)
-    throttleoutgoing(interface,'0.0.0.0/0')
+    throttleoutgoing(interface,linerate)
     connections = pollconnections(interface)
-    print connections
+    #print connections
     for connection in connections:
         connection = connection.strip()
         ordered = re.sub(':|,|/|Mbps',' ',connection)
@@ -277,9 +298,9 @@ USAGE
             query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
             print query
             c.execute(query)
-    conn.commit()
-    c.execute('SELECT * FROM conns')
-    print(c.fetchall())
+        conn.commit()
+        c.execute('SELECT * FROM conns')
+        print(c.fetchall())
 
 if __name__ == '__main__':
     if DEBUG:
