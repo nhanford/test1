@@ -11,7 +11,7 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,math,socket,sched,time,threading,sqlite3
+import sys,os,re,subprocess,math,socket,sched,time,threading,sqlite3,daemon
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
@@ -35,16 +35,25 @@ class CLIError(Exception):
     def __unicode__(self):
         return self.msg
 #Here are the functions that poll the proc filesystem, etc.
+#So there are a lot of issues with the below, but I'm not going to address them just yet..
 def checkibalance():
-    out = subprocess.check_output(['service','irqbalance','status'])
+    try:
+        stat = subprocess.check_call(['service','irqbalance','stop'])
+        print 'first try block'
+    except subprocess.CalledProcessError:
+        print 'not running'
+        return 0
+    print stat
+    if stat > 0:
+        return 0
+    try:
+        out = subprocess.check_output(['service','irqbalance','status'])
+    except subprocess.CalledProcessError:
+        print 'nah'
+        return 0
     if 'stop' in out or 'inactive' in out:
         print 'irqbalance is off\n'
-        return True
-    try:
-        subprocess.check_call(['service','irqbalance','stop'])
-    except CalledProcessError:
-        return 0
-    return 1
+        return 1
 
 def pollcpu():
     try:
@@ -247,7 +256,7 @@ USAGE
         PRIMARY KEY (sourceip, sourceport, destip, destport));''')
     conn.commit()
     ibalance = checkibalance()
-    if !ibalance:
+    if not ibalance:
         print "Unable to disable irqbalance"
         exit()
     numcpus = pollcpu()
@@ -257,7 +266,8 @@ USAGE
     #print affinity
     setaffinity(affinity,numcpus)
     linerate = getlinerate(interface)
-    throttleoutgoing(interface,linerate)
+    #throttleoutgoing(interface,linerate)
+
     connections = pollconnections(interface)
     #print connections
     for connection in connections:
@@ -308,4 +318,5 @@ if __name__ == '__main__':
     if TESTRUN:
         import doctest
         doctest.testmod()
-    sys.exit(main())
+    with daemon.DaemonContext():
+        sys.exit(main())
