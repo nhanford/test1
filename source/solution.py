@@ -20,7 +20,7 @@ __version__ = 0.1
 __date__ = '2015-06-22'
 __updated__ = '2015-07-08'
 
-SPEEDCLASSES = [(100,'1:100'),(1000,'1:1000'),(5000,'1:5000'),(10000,'1:10000'),(40000,'1:40000'),(100000,'1:100000')]
+SPEEDCLASSES = [(100,'1:1'),(1000,'1:2'),(5000,'1:3'),(10000,'1:4'),(40000,'1:5'),(100000,'1:6')]
 
 DEBUG = 0
 TESTRUN = 0
@@ -39,21 +39,10 @@ class CLIError(Exception):
 def checkibalance():
     try:
         stat = subprocess.check_call(['service','irqbalance','stop'])
-        print 'first try block'
     except subprocess.CalledProcessError:
-        print 'not running'
-        return 0
-    print stat
-    if stat > 0:
-        return 0
-    try:
-        out = subprocess.check_output(['service','irqbalance','status'])
-    except subprocess.CalledProcessError:
-        print 'nah'
-        return 0
-    if 'stop' in out or 'inactive' in out:
-        print 'irqbalance is off\n'
+        print 'Cound not stop irqbalance'
         return 1
+    return 0
 
 def pollcpu():
     try:
@@ -146,20 +135,21 @@ def getlinerate(iface):
 
 def setthrottles(iface):
     try:
-        subprocess.check_call(['tc','qdisc','del','dev',iface,'root'])
-    except OSError:
-        print 'No running qdisc on interface'
-    except CalledProcessError:
-        print 'Could not interface with os to initialize tc settings.'
-        return
+        stat = subprocess.check_call(['tc','qdisc','del','dev',iface,'root'])
+    except subprocess.CalledProcessError as e:
+        if e.returncode != 2:
+            raise e
     try:
-        subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root htb'])
-    except:
-        print 'Could not interface with os to initialize tc settings.'
+        subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root','htb'])
+    except subprocess.CalledProcessError as e:
+        print e
+        print e.returncode
         return
     for speedclass in SPEEDCLASSES:
+        print speedclass[0]
+        print speedclass[1]
         try:
-            subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid ',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
+            subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
         except:
             print 'Could not interface with os to initialize tc settings.'
             return
@@ -169,8 +159,8 @@ def parseconnections(connections):
     pass
     #return an iterator or a list of connections, whatever is easier in sqlite
 
-def throttleoutgoing(ipaddr,iface,speedclass):
-    success = subprocess.check_call('tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr,'/32','flowid',speedclass)
+def throttleoutgoing(iface,ipaddr,speedclass):
+    success = subprocess.check_call('tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1])
     return success
 
 def pollconnections(iface):
@@ -255,10 +245,7 @@ USAGE
         retrans     int,
         PRIMARY KEY (sourceip, sourceport, destip, destport));''')
     conn.commit()
-    ibalance = checkibalance()
-    if not ibalance:
-        print "Unable to disable irqbalance"
-        exit()
+    checkibalance()
     numcpus = pollcpu()
     print 'The number of cpus is:', numcpus
     irqlist = pollirq(interface)
@@ -266,7 +253,7 @@ USAGE
     #print affinity
     setaffinity(affinity,numcpus)
     linerate = getlinerate(interface)
-    #throttleoutgoing(interface,linerate)
+    setthrottles(interface)
 
     connections = pollconnections(interface)
     #print connections
@@ -308,9 +295,10 @@ USAGE
             query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
             print query
             c.execute(query)
-        conn.commit()
-        c.execute('SELECT * FROM conns')
-        print(c.fetchall())
+    conn.commit()
+    c.execute('SELECT * FROM conns')
+    print('got here')
+    print(c.fetchall())
 
 if __name__ == '__main__':
     if DEBUG:
@@ -318,5 +306,6 @@ if __name__ == '__main__':
     if TESTRUN:
         import doctest
         doctest.testmod()
-    with daemon.DaemonContext():
-        sys.exit(main())
+    sys.exit(main())
+    #with daemon.DaemonContext():
+    #    sys.exit(main())
