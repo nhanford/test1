@@ -209,9 +209,10 @@ USAGE
     conn = sqlite3.connect('connections.db')
     c = conn.cursor()
     try:
-        c.execute('''DROP TABLE conns''')
-    except sqlite3.Error:
-        print('Table doesn\'t exist; Creating table...')
+        c.execute('''SELECT * FROM conns''')
+        print 'worked'
+    except sqlite3.OperationalError:
+        print 'Table doesn\'t exist; Creating table...'
     #c.execute('''CREATE TABLE conns (state text,
     #    recvq       int,
     #    sendq       int,
@@ -235,15 +236,28 @@ USAGE
     #    rcvrtt      int,
     #    rcvspace    int,
     #    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-    c.execute('''CREATE TABLE conns (
-        sourceip    text    NOT NULL,
-        sourceport  text    NOT NULL,
-        destip      text    NOT NULL,
-        destport    text    NOT NULL,
-        rttavg      real,
-        sendrate    real,
-        retrans     int,
-        PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+        try:
+            c.execute('''CREATE TABLE conns (
+                sourceip    text    NOT NULL,
+                sourceport  text    NOT NULL,
+                destip      text    NOT NULL,
+                destport    text    NOT NULL,
+                rttavg      real,
+                sendrate    real,
+                retrans     int,
+                PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+        except sqlite3.OperationalError:
+            print 'I don\'t know you. Recreating Database.'
+            c.execute('''DROP TABLE conns''')
+            c.execute('''CREATE TABLE conns (
+                sourceip    text    NOT NULL,
+                sourceport  text    NOT NULL,
+                destip      text    NOT NULL,
+                destport    text    NOT NULL,
+                rttavg      real,
+                sendrate    real,
+                retrans     int,
+                PRIMARY KEY (sourceip, sourceport, destip, destport));''')
     conn.commit()
     checkibalance()
     numcpus = pollcpu()
@@ -294,7 +308,10 @@ USAGE
         #Assemble Query String
             query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
             print query
-            c.execute(query)
+            try:
+                c.execute(query)
+            except sqlite3.IntegrityError as e:
+                print e
     conn.commit()
     c.execute('SELECT * FROM conns')
     print('got here')
