@@ -20,7 +20,7 @@ __version__ = 0.1
 __date__ = '2015-06-22'
 __updated__ = '2015-07-08'
 
-SPEEDCLASSES = [(100,'1:1'),(1000,'1:2'),(5000,'1:3'),(10000,'1:4'),(40000,'1:5'),(100000,'1:6')]
+SPEEDCLASSES = [(900,'1:2'),(4900,'1:3'),(9900,'1:4')]
 
 DEBUG = 0
 TESTRUN = 0
@@ -307,14 +307,15 @@ USAGE
         if len(ips) > 1 and len(ports) > 1 and rtt and retrans and sendrate:
         #Assemble Query String
             query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
-            print query
             try:
                 c.execute(query)
-            except sqlite3.IntegrityError as e:
-                print e
+            except sqlite3.IntegrityError:
+                print 'found a duplicate'
+                #this will be where I do a comparison and throttle appropriately...
+                query = 'REPLACE INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
+                c.execute(query)
     conn.commit()
     c.execute('SELECT * FROM conns')
-    print('got here')
     print(c.fetchall())
 
 if __name__ == '__main__':
