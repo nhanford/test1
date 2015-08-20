@@ -141,6 +141,13 @@ def pollconnections(iface):
     out = out.splitlines()
     return out
 
+def setmtu(iface):
+    #This has been changed for experimentation at 1500B
+    try:
+        out = subprocess.check_output(['sudo','ifconfig',iface,'mtu','1500'])
+    except:
+        print 'Could not set MTU'
+    
 def throttleincoming(connection):
     pass
 

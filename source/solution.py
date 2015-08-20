@@ -11,20 +11,34 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,math,socket,sched,time,threading,sqlite3,daemon
+import sys,os,re,subprocess,socket,sched,time,threading,sqlite3,daemon,struct
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
 __all__ = []
 __version__ = 0.1
 __date__ = '2015-06-22'
-__updated__ = '2015-07-08'
+__updated__ = '2015-08-19'
 
 SPEEDCLASSES = [(900,'1:2'),(4900,'1:3'),(9900,'1:4')]
 
 DEBUG = 0
 TESTRUN = 0
 
+#class DB(object):
+#    _db_conn = None
+#    _db_c = None
+#
+#    def __init__(self):
+#        self._db_conn = sqlite3.connect('connections.db')
+#        self._db_c = self.conn.cursor()
+#
+#    def query(self, query, params):
+#        return self._db_c.execute(query, params)
+#
+#    def __del__(self):
+#        self._db_conn.close()
+#
 class CLIError(Exception):
     '''Generic exception to raise and log different fatal errors.'''
     def __init__(self, msg):
@@ -43,6 +57,11 @@ def checkibalance():
         print 'Cound not stop irqbalance'
         return 1
     return 0
+
+def dbtest(c):
+    c.execute('SELECT * FROM conns')
+    print c.fetchall()
+    return
 
 def pollcpu():
     try:
@@ -156,19 +175,142 @@ def setthrottles(iface):
     return
 
 def parseconnections(connections):
-    pass
-    #return an iterator or a list of connections, whatever is easier in sqlite
+    #print connections
+    conn = conn = sqlite3.connect('connections.db')
+    c = conn.cursor()
+    for connection in connections:
+        connection = connection.strip()
+        ordered = re.sub(':|,|/|Mbps',' ',connection)
+        ordered = connection.split()
+        #print 'State is: ',ordered[0]
+        ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
+        #if ips:
+        #    print 'Source IP is:',ips[0]
+        #    print 'Destination IP is:', ips[1]
+        #else:
+        #    print 'Source IP is: None'
+        #    print 'Destination IP is None'
+        ports = re.findall('\d:\w+',connection)
+        #if ports:
+        #    print 'Source port is:',ports[0][2:]
+        #    print 'Destination port is',ports[1][2:]
+        #else:
+        #    print 'Source port is: None'
+        #    print 'Destination port is None'
+        #rtt: first value is the average rtt; the second value is the variance
+        rtt = re.search('rtt:\d+[.]?\d+',connection)
+        if rtt:
+            rtt = rtt.group(0)[4:]
+        #print 'Average RTT is:',rtt
+        retrans = re.search('retrans:\d+\/\d+',connection)
+        if retrans:
+            retrans = retrans.group(0)
+            retrans = re.sub('retrans:\d+\/','',retrans)
+        #    print 'Number of retransmits is:',retrans
+        else:
+            print 'Number of retransmits is not available'
+            retrans = '-1'
+        sendrate = re.search('send \d+.\d+',connection)
+        sendrate = sendrate.group(0)[5:]
+        if len(ips) > 1 and len(ports) > 1 and rtt and retrans and sendrate:
+        #Assemble Query String
+            query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
+            print query
+            try:
+                c.execute(query)
+            except sqlite3.IntegrityError:
+                print 'found a duplicate'
+                #this will be where I do a comparison and throttle appropriately...
+                query = 'REPLACE INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
+                c.execute(query)
+            c.execute('SELECT * FROM conns')
+            print c.fetchall()
+    conn.commit()
+    conn.close()
+
+def dbinit(conn,c):
+        try:
+            c.execute('''SELECT * FROM conns''')
+            print 'worked'
+        except sqlite3.OperationalError:
+            print 'Table doesn\'t exist; Creating table...'
+        #c.execute('''CREATE TABLE conns (state text,
+        #    recvq       int,
+        #    sendq       int,
+        #    sourceip    text    NOT NULL,
+        #    sourceport  text    NOT NULL,
+        #    destip      text    NOT NULL,
+        #    destport    text    NOT NULL,
+        #    iface       text,
+        #    tcp         text,
+        #    wscaleavg   int,
+        #    wscalemax   int,
+        #    rto         int,
+        #    rttavg      real,
+        #    ato         int,
+        #    mss         int,
+        #    cwnd        int,
+        #    ssthresh    int,
+        #    sendrate    real,
+        #    pacrate     real,
+        #    retrans     int,
+        #    rcvrtt      int,
+        #    rcvspace    int,
+        #    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+            try:
+                c.execute('''CREATE TABLE conns (
+                    sourceip    text    NOT NULL,
+                    sourceport  text    NOT NULL,
+                    destip      text    NOT NULL,
+                    destport    text    NOT NULL,
+                    rttavg      real,
+                    sendrate    real,
+                    retrans     int,
+                    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+            except sqlite3.OperationalError:
+                print 'I don\'t know you. Recreating Database.'
+                c.execute('''DROP TABLE conns''')
+                c.execute('''CREATE TABLE conns (
+                    sourceip    text    NOT NULL,
+                    sourceport  text    NOT NULL,
+                    destip      text    NOT NULL,
+                    destport    text    NOT NULL,
+                    rttavg      real,
+                    sendrate    real,
+                    retrans     int,
+                    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+        conn.commit()
 
 def throttleoutgoing(iface,ipaddr,speedclass):
     success = subprocess.check_call('tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1])
     return success
 
-def pollconnections(iface):
+def pollss(iface):
     out = subprocess.check_output(['ss','-i','-t'])
     out = re.sub('\A.+\n','',out)
     out = re.sub('\n\t','',out)
     out = out.splitlines()
     return out
+
+def polltcp(iface):
+    tcp = open('/proc/net/tcp','r')
+    out = tcp.read()
+    out = out.splitlines()
+    out = out[1:]
+    tcp.close()
+    tcp6 = open('/proc/net/tcp6','r')
+    out6 = tcp6.read()
+    out6 = out6.splitlines
+    out6 = out6[1:]
+    tcp6.close()
+    out = out.append(out6)
+    return out
+
+def doconns(interface):
+    connections = pollss(interface)
+    print(polltcp(interface))
+    parseconnections(connections)
+    threading.Timer(5, doconns, [interface]).start()
 
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
@@ -208,57 +350,7 @@ USAGE
         return 2
     conn = sqlite3.connect('connections.db')
     c = conn.cursor()
-    try:
-        c.execute('''SELECT * FROM conns''')
-        print 'worked'
-    except sqlite3.OperationalError:
-        print 'Table doesn\'t exist; Creating table...'
-    #c.execute('''CREATE TABLE conns (state text,
-    #    recvq       int,
-    #    sendq       int,
-    #    sourceip    text    NOT NULL,
-    #    sourceport  text    NOT NULL,
-    #    destip      text    NOT NULL,
-    #    destport    text    NOT NULL,
-    #    iface       text,
-    #    tcp         text,
-    #    wscaleavg   int,
-    #    wscalemax   int,
-    #    rto         int,
-    #    rttavg      real,
-    #    ato         int,
-    #    mss         int,
-    #    cwnd        int,
-    #    ssthresh    int,
-    #    sendrate    real,
-    #    pacrate     real,
-    #    retrans     int,
-    #    rcvrtt      int,
-    #    rcvspace    int,
-    #    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-        try:
-            c.execute('''CREATE TABLE conns (
-                sourceip    text    NOT NULL,
-                sourceport  text    NOT NULL,
-                destip      text    NOT NULL,
-                destport    text    NOT NULL,
-                rttavg      real,
-                sendrate    real,
-                retrans     int,
-                PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-        except sqlite3.OperationalError:
-            print 'I don\'t know you. Recreating Database.'
-            c.execute('''DROP TABLE conns''')
-            c.execute('''CREATE TABLE conns (
-                sourceip    text    NOT NULL,
-                sourceport  text    NOT NULL,
-                destip      text    NOT NULL,
-                destport    text    NOT NULL,
-                rttavg      real,
-                sendrate    real,
-                retrans     int,
-                PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-    conn.commit()
+    dbinit(conn,c)
     checkibalance()
     numcpus = pollcpu()
     print 'The number of cpus is:', numcpus
@@ -268,55 +360,10 @@ USAGE
     setaffinity(affinity,numcpus)
     linerate = getlinerate(interface)
     setthrottles(interface)
-
-    connections = pollconnections(interface)
-    #print connections
-    for connection in connections:
-        connection = connection.strip()
-        ordered = re.sub(':|,|/|Mbps',' ',connection)
-        ordered = connection.split()
-        #print 'State is: ',ordered[0]
-        ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
-        #if ips:
-        #    print 'Source IP is:',ips[0]
-        #    print 'Destination IP is:', ips[1]
-        #else:
-        #    print 'Source IP is: None'
-        #    print 'Destination IP is None'
-        ports = re.findall('\d:\w+',connection)
-        #if ports:
-        #    print 'Source port is:',ports[0][2:]
-        #    print 'Destination port is',ports[1][2:]
-        #else:
-        #    print 'Source port is: None'
-        #    print 'Destination port is None'
-        #rtt: first value is the average rtt; the second value is the variance
-        rtt = re.search('rtt:\d+[.]?\d+',connection)
-        if rtt:
-            rtt = rtt.group(0)[4:]
-        #print 'Average RTT is:',rtt
-        retrans = re.search('retrans:\d+\/\d+',connection)
-        if retrans:
-            retrans = retrans.group(0)
-            retrans = re.sub('retrans:\d+\/','',retrans)
-        #    print 'Number of retransmits is:',retrans
-        else:
-            print 'Number of retransmits is not available'
-        sendrate = re.search('send \d+.\d+',connection)
-        sendrate = sendrate.group(0)[5:]
-        if len(ips) > 1 and len(ports) > 1 and rtt and retrans and sendrate:
-        #Assemble Query String
-            query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
-            try:
-                c.execute(query)
-            except sqlite3.IntegrityError:
-                print 'found a duplicate'
-                #this will be where I do a comparison and throttle appropriately...
-                query = 'REPLACE INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
-                c.execute(query)
     conn.commit()
-    c.execute('SELECT * FROM conns')
-    print(c.fetchall())
+    conn.close()
+    #threading.Timer(5, doconns, [interface]).start()
+    doconns(interface)
 
 if __name__ == '__main__':
     if DEBUG:
