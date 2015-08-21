@@ -58,10 +58,6 @@ def checkibalance():
         return 1
     return 0
 
-def dbtest(c):
-    c.execute('SELECT * FROM conns')
-    print c.fetchall()
-    return
 
 def pollcpu():
     try:
@@ -228,7 +224,9 @@ def parseconnections(connections):
     conn.commit()
     conn.close()
 
-def dbinit(conn,c):
+def dbinit():
+        conn = sqlite3.connect('connections.db')
+        c = conn.cursor()
         try:
             c.execute('''SELECT * FROM conns''')
             print 'worked'
@@ -260,9 +258,9 @@ def dbinit(conn,c):
             try:
                 c.execute('''CREATE TABLE conns (
                     sourceip    text    NOT NULL,
-                    sourceport  text    NOT NULL,
+                    sourceport  int    NOT NULL,
                     destip      text    NOT NULL,
-                    destport    text    NOT NULL,
+                    destport    int    NOT NULL,
                     rttavg      real,
                     sendrate    real,
                     retrans     int,
@@ -272,43 +270,76 @@ def dbinit(conn,c):
                 c.execute('''DROP TABLE conns''')
                 c.execute('''CREATE TABLE conns (
                     sourceip    text    NOT NULL,
-                    sourceport  text    NOT NULL,
+                    sourceport  int    NOT NULL,
                     destip      text    NOT NULL,
-                    destport    text    NOT NULL,
+                    destport    int    NOT NULL,
                     rttavg      real,
                     sendrate    real,
                     retrans     int,
                     PRIMARY KEY (sourceip, sourceport, destip, destport));''')
         conn.commit()
+        conn.close()
 
 def throttleoutgoing(iface,ipaddr,speedclass):
     success = subprocess.check_call('tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1])
     return success
 
 def pollss(iface):
-    out = subprocess.check_output(['ss','-i','-t'])
+    out = subprocess.check_output(['ss','-i','-t','-n'])
     out = re.sub('\A.+\n','',out)
     out = re.sub('\n\t','',out)
     out = out.splitlines()
     return out
 
-def polltcp(iface):
+def polltcp():
     tcp = open('/proc/net/tcp','r')
-    out = tcp.read()
-    out = out.splitlines()
+    out = tcp.readlines()
     out = out[1:]
     tcp.close()
-    tcp6 = open('/proc/net/tcp6','r')
-    out6 = tcp6.read()
-    out6 = out6.splitlines
-    out6 = out6[1:]
-    tcp6.close()
-    out = out.append(out6)
+    #tcp6 = open('/proc/net/tcp6','r')
+    #out6 = tcp6.readlines()
+    #out6 = out6[1:]
+    #tcp6.close()
+    #out += out6
     return out
+
+def parsetcp(connections):
+    conn = sqlite3.connect('connections.db')
+    c = conn.cursor()
+    for connection in connections:
+        connection = connection.strip()
+        connection = connection.split()
+        if connection[1] != '00000000:0000' and connection[2] != '00000000:0000':
+            print connection
+            sourceip = connection[1].split(':')[0]
+            sourceport = connection[1].split(':')[1]
+            sourceip = int(sourceip,16)
+            sourceip = struct.pack('<L',sourceip)
+            sourceip = socket.inet_ntoa(sourceip)
+            sourceport = int(sourceport,16)
+            destip = connection[2].split(':')[0]
+            destport = connection[2].split(':')[1]
+            destip = int(destip,16)
+            destip = struct.pack('<L',destip)
+            destip = socket.inet_ntoa(destip)
+            destport = int(destport,16)
+            retrans = connection[6]
+            print sourceip, sourceport, destip, destport, retrans
+            query = 'SELECT * FROM conns WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
+            print query
+            c.execute(query)
+            print(c.fetchall())
+            query = 'UPDATE conns SET retrans = {retr} WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
+            print query
+            c.execute(query)
+            conn.commit()
+            c.execute('SELECT * FROM conns')
+            print(c.fetchall())
+    conn.close()
 
 def doconns(interface):
     connections = pollss(interface)
-    print(polltcp(interface))
+    print(polltcp())
     parseconnections(connections)
     threading.Timer(5, doconns, [interface]).start()
 
@@ -348,22 +379,22 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
-    conn = sqlite3.connect('connections.db')
-    c = conn.cursor()
-    dbinit(conn,c)
+    dbinit()
     checkibalance()
     numcpus = pollcpu()
-    print 'The number of cpus is:', numcpus
+    #print 'The number of cpus is:', numcpus
     irqlist = pollirq(interface)
     affinity = pollaffinity(irqlist)
     #print affinity
     setaffinity(affinity,numcpus)
     linerate = getlinerate(interface)
     setthrottles(interface)
-    conn.commit()
-    conn.close()
     #threading.Timer(5, doconns, [interface]).start()
-    doconns(interface)
+    #doconns(interface)
+    conns = pollss(interface)
+    parseconnections(conns)
+    conns = polltcp()
+    parsetcp(conns)
 
 if __name__ == '__main__':
     if DEBUG:
