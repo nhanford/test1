@@ -11,9 +11,10 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,socket,sched,time,threading,sqlite3,daemon,struct
-from argparse import ArgumentParser
-from argparse import RawDescriptionHelpFormatter
+#print 'debug'
+import sys,os,re,subprocess,socket,sched,time,threading,sqlite3,struct
+#from argparse import ArgumentParser
+#from argparse import RawDescriptionHelpFormatter
 
 __all__ = []
 __version__ = 0.1
@@ -197,94 +198,102 @@ def parseconnections(connections):
         rtt = re.search('rtt:\d+[.]?\d+',connection)
         if rtt:
             rtt = rtt.group(0)[4:]
-        #print 'Average RTT is:',rtt
+            #print 'Average RTT is:',rtt
+        
+        cwnd = re.search('cwnd:\d+',connection)
+        if cwnd:
+            cwnd = cwnd.group(0)[5:]
+            #print 'cwnd is',cwnd
         retrans = re.search('retrans:\d+\/\d+',connection)
         if retrans:
             retrans = retrans.group(0)
             retrans = re.sub('retrans:\d+\/','',retrans)
         #    print 'Number of retransmits is:',retrans
         else:
-            print 'Number of retransmits is not available'
+            #print 'Number of retransmits is not available'
             retrans = '-1'
         sendrate = re.search('send \d+.\d+',connection)
         sendrate = sendrate.group(0)[5:]
-        if len(ips) > 1 and len(ports) > 1 and rtt and retrans and sendrate:
+        if len(ips) > 1 and len(ports) > 1 and rtt and cwnd and retrans and sendrate:
         #Assemble Query String
-            query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
-            print query
+            query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, cwnd, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+cwnd+', '+sendrate+', '+retrans+')'
+            #print query
             try:
                 c.execute(query)
             except sqlite3.IntegrityError:
-                print 'found a duplicate'
+                #print 'found a duplicate'
                 #this will be where I do a comparison and throttle appropriately...
-                query = 'REPLACE INTO conns (sourceip, sourceport, destip, destport, rttavg, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+sendrate+', '+retrans+')'
+                query = 'REPLACE INTO conns (sourceip, sourceport, destip, destport, rttavg, cwnd, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+cwnd+', '+sendrate+', '+retrans+')'
                 c.execute(query)
-            c.execute('SELECT * FROM conns')
-            print c.fetchall()
+            #c.execute('SELECT * FROM conns')
+            #print c.fetchall()
     conn.commit()
     conn.close()
 
 def dbinit():
-        conn = sqlite3.connect('connections.db')
-        c = conn.cursor()
-        try:
-            c.execute('''SELECT * FROM conns''')
-            print 'worked'
-        except sqlite3.OperationalError:
-            print 'Table doesn\'t exist; Creating table...'
-        #c.execute('''CREATE TABLE conns (state text,
-        #    recvq       int,
-        #    sendq       int,
-        #    sourceip    text    NOT NULL,
-        #    sourceport  text    NOT NULL,
-        #    destip      text    NOT NULL,
-        #    destport    text    NOT NULL,
-        #    iface       text,
-        #    tcp         text,
-        #    wscaleavg   int,
-        #    wscalemax   int,
-        #    rto         int,
-        #    rttavg      real,
-        #    ato         int,
-        #    mss         int,
-        #    cwnd        int,
-        #    ssthresh    int,
-        #    sendrate    real,
-        #    pacrate     real,
-        #    retrans     int,
-        #    rcvrtt      int,
-        #    rcvspace    int,
-        #    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-            try:
-                c.execute('''CREATE TABLE conns (
-                    sourceip    text    NOT NULL,
-                    sourceport  int    NOT NULL,
-                    destip      text    NOT NULL,
-                    destport    int    NOT NULL,
-                    rttavg      real,
-                    sendrate    real,
-                    retrans     int,
-                    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-            except sqlite3.OperationalError:
-                print 'I don\'t know you. Recreating Database.'
-                c.execute('''DROP TABLE conns''')
-                c.execute('''CREATE TABLE conns (
-                    sourceip    text    NOT NULL,
-                    sourceport  int    NOT NULL,
-                    destip      text    NOT NULL,
-                    destport    int    NOT NULL,
-                    rttavg      real,
-                    sendrate    real,
-                    retrans     int,
-                    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-        conn.commit()
-        conn.close()
+	#print 'debug'
+	conn = sqlite3.connect('connections.db')
+	c = conn.cursor()
+	try:
+		c.execute('''SELECT * FROM conns''')
+		#print 'worked'
+	except sqlite3.OperationalError:
+		print 'Table doesn\'t exist; Creating table...'
+	#c.execute('''CREATE TABLE conns (state text,
+	#    recvq       int,
+	#    sendq       int,
+	#    sourceip    text    NOT NULL,
+	#    sourceport  text    NOT NULL,
+	#    destip      text    NOT NULL,
+	#    destport    text    NOT NULL,
+	#    iface       text,
+	#    tcp         text,
+	#    wscaleavg   int,
+	#    wscalemax   int,
+	#    rto         int,
+	#    rttavg      real,
+	#    ato         int,
+	#    mss         int,
+	#    cwnd        int,
+	#    ssthresh    int,
+	#    sendrate    real,
+	#    pacrate     real,
+	#    retrans     int,
+	#    rcvrtt      int,
+	#    rcvspace    int,
+	#    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+		try:
+			c.execute('''CREATE TABLE conns (
+				sourceip    text    NOT NULL,
+				sourceport  int    NOT NULL,
+				destip      text    NOT NULL,
+				destport    int    NOT NULL,
+				rttavg      real,
+				cwnd		int,
+				sendrate    real,
+				retrans     int,
+				PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+		except sqlite3.OperationalError:
+			print 'I don\'t know you. Recreating Database.'
+			c.execute('''DROP TABLE conns''')
+			c.execute('''CREATE TABLE conns (
+				sourceip    text    NOT NULL,
+				sourceport  int    NOT NULL,
+				destip      text    NOT NULL,
+				destport    int    NOT NULL,
+				rttavg      real,
+				cwnd		int,
+				sendrate    real,
+				retrans     int,
+				PRIMARY KEY (sourceip, sourceport, destip, destport));''')
+	conn.commit()
+	conn.close()
 
 def throttleoutgoing(iface,ipaddr,speedclass):
     success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
     return success
 
-def pollss(iface):
+def pollss():
     out = subprocess.check_output(['ss','-i','-t','-n'])
     out = re.sub('\A.+\n','',out)
     out = re.sub('\n\t','',out)
@@ -310,7 +319,7 @@ def parsetcp(connections):
         connection = connection.strip()
         connection = connection.split()
         if connection[1] != '00000000:0000' and connection[2] != '00000000:0000':
-            print connection
+            #print connection
             sourceip = connection[1].split(':')[0]
             sourceport = connection[1].split(':')[1]
             sourceip = int(sourceip,16)
@@ -324,24 +333,26 @@ def parsetcp(connections):
             destip = socket.inet_ntoa(destip)
             destport = int(destport,16)
             retrans = connection[6]
-            print sourceip, sourceport, destip, destport, retrans
-            query = 'SELECT * FROM conns WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
-            print query
-            c.execute(query)
-            print(c.fetchall())
+            #print sourceip, sourceport, destip, destport, retrans
+            #query = 'SELECT * FROM conns WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
+            #print query
+            #c.execute(query)
+            #print(c.fetchall())
             query = 'UPDATE conns SET retrans = {retr} WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
-            print query
+            #print query
             c.execute(query)
-            conn.commit()
             c.execute('SELECT * FROM conns')
-            print(c.fetchall())
+            print c.fetchall()
+            print '-----------'
+    conn.commit()
     conn.close()
 
-def doconns(interface):
-    connections = pollss(interface)
-    print(polltcp())
+def doconns():
+    connections = pollss()
     parseconnections(connections)
-    threading.Timer(5, doconns, [interface]).start()
+    tcpconns = polltcp()
+    parsetcp(tcpconns)
+    threading.Timer(5, doconns).start()
 
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
@@ -361,41 +372,39 @@ def main(argv=None): # IGNORE:C0111
 USAGE
 ''' % (program_shortdesc)
 
-    try:
+#    try:
         # Setup argument parser
-        parser = ArgumentParser(description=program_license, formatter_class=RawDescriptionHelpFormatter)
-        parser.add_argument('interface', metavar='interface', action='store', help='specify the interface name of your network controller (i.e. eth1)')
+#        parser = ArgumentParser(description=program_license, formatter_class=RawDescriptionHelpFormatter)
+        #parser.add_argument('interface', metavar='interface', action='store', help='specify the interface name of your network controller (i.e. eth1)')
         # Process arguments
-        args = parser.parse_args()
-        interface = args.interface
+#        args = parser.parse_args()
+        #interface = args.interface
 
-    except KeyboardInterrupt:
-        print 'Operation Cancelled\n'
-        return 0
-    except Exception, e:
-        if DEBUG or TESTRUN:
-            raise(e)
-        indent = len(program_name) * ' '
-        sys.stderr.write(program_name + ': ' + repr(e) + '\n')
-        sys.stderr.write(indent + '  for help use --help'+'\n')
-        return 2
+#    except KeyboardInterrupt:
+#        print 'Operation Cancelled\n'
+#        return 0
+#    except Exception, e:
+#        if DEBUG or TESTRUN:
+#            raise(e)
+#        indent = len(program_name) * ' '
+#        sys.stderr.write(program_name + ': ' + repr(e) + '\n')
+#        sys.stderr.write(indent + '  for help use --help'+'\n')
+#        return 2
+	#print 'debug'
     dbinit()
-    checkibalance()
-    numcpus = pollcpu()
+    #checkibalance()
+    #numcpus = pollcpu()
     #print 'The number of cpus is:', numcpus
-    irqlist = pollirq(interface)
-    affinity = pollaffinity(irqlist)
+    #irqlist = pollirq(interface)
+    #affinity = pollaffinity(irqlist)
     #print affinity
-    setaffinity(affinity,numcpus)
-    linerate = getlinerate(interface)
-    setthrottles(interface)
+    #setaffinity(affinity,numcpus)
+    #linerate = getlinerate(interface)
+    #setthrottles(interface)
     #threading.Timer(5, doconns, [interface]).start()
-    #doconns(interface)
-    conns = pollss(interface)
-    parseconnections(conns)
-    conns = polltcp()
-    parsetcp(conns)
-	throttleoutgoing(interface,'10.2.2.2',4900)
+    doconns()
+    #conns = pollss(interface)
+    #conns = polltcp()
 
 if __name__ == '__main__':
     if DEBUG:
@@ -404,5 +413,5 @@ if __name__ == '__main__':
         import doctest
         doctest.testmod()
     sys.exit(main())
-    #with daemon.DaemonContext():
-    #    sys.exit(main())
+#    with daemon.DaemonContext():
+#        sys.exit(main())
