@@ -205,7 +205,7 @@ def parseconnections(connections):
         if wscaleavg:
             wscaleavg = wscaleavg.group(0)[7:]
         else:
-            wscaleavg = -1
+            wscaleavg = '-1'
         cwnd = re.search('cwnd:\d+',connection)
         if cwnd:
             cwnd = cwnd.group(0)[5:]
@@ -219,7 +219,7 @@ def parseconnections(connections):
         #    print 'Number of retransmits is:',retrans
         else:
             #print 'Number of retransmits is not available'
-            retrans = '-1'
+            retrans = '0'
         sendrate = re.search('send \d+.\d+',connection)
         if sendrate:
             sendrate = sendrate.group(0)[5:]
@@ -345,12 +345,17 @@ def parsetcp(connections):
             destip = struct.pack('<L',destip)
             destip = socket.inet_ntoa(destip)
             destport = int(destport,16)
-            retrans = connection[6]
+            retrans = int(connection[6],16)
             #print sourceip, sourceport, destip, destport, retrans
-            #query = 'SELECT * FROM conns WHERE sourceip = \'{sip}\' AND sourceport = \'{spo}\' AND destip = \'{dip}\' AND destport = \'{dpo}\''.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
-            #print query
-            #c.execute(query)
-            #print(c.fetchall())
+            query = 'SELECT retrans FROM conns WHERE sourceip = \'{sip}\' AND sourceport = {spo} AND destip = \'{dip}\' AND destport = {dpo}'.format(sip=sourceip, spo=sourceport, dip=destip, dpo=destport)
+            c.execute(query)
+            tempretr = c.fetchall()
+            print tempretr
+            if len(tempretr)==0:
+                tempretr = 0
+            else:
+                tempretr = int(tempretr[0][0])
+            retrans += tempretr
             query = 'UPDATE conns SET retrans={retr} WHERE sourceip=\'{sip}\' AND sourceport=\'{spo}\' AND destip=\'{dip}\' AND destport=\'{dpo}\''.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
             #print query
             c.execute(query)
