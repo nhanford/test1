@@ -19,7 +19,7 @@ import sys,os,re,subprocess,socket,sched,time,threading,sqlite3,struct
 __all__ = []
 __version__ = 0.1
 __date__ = '2015-06-22'
-__updated__ = '2015-08-19'
+__updated__ = '2015-08-24'
 
 SPEEDCLASSES = [(900,'1:2'),(4900,'1:3'),(9900,'1:4')]
 
@@ -199,11 +199,19 @@ def parseconnections(connections):
         if rtt:
             rtt = rtt.group(0)[4:]
             #print 'Average RTT is:',rtt
-        
+        else:
+            rtt = '-1'
+        wscaleavg = re.search('wscale:\d+',connection)
+        if wscaleavg:
+            wscaleavg = wscaleavg.group(0)[7:]
+        else:
+            wscaleavg = -1
         cwnd = re.search('cwnd:\d+',connection)
         if cwnd:
             cwnd = cwnd.group(0)[5:]
             #print 'cwnd is',cwnd
+        else:
+            cwnd = '-1'
         retrans = re.search('retrans:\d+\/\d+',connection)
         if retrans:
             retrans = retrans.group(0)
@@ -213,17 +221,20 @@ def parseconnections(connections):
             #print 'Number of retransmits is not available'
             retrans = '-1'
         sendrate = re.search('send \d+.\d+',connection)
-        sendrate = sendrate.group(0)[5:]
+        if sendrate:
+            sendrate = sendrate.group(0)[5:]
+        else:
+            sendrate = '-1'
         if len(ips) > 1 and len(ports) > 1 and rtt and cwnd and retrans and sendrate:
         #Assemble Query String
-            query = 'INSERT INTO conns (sourceip, sourceport, destip, destport, rttavg, cwnd, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+cwnd+', '+sendrate+', '+retrans+')'
+            query = 'INSERT INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+')'
             #print query
             try:
                 c.execute(query)
             except sqlite3.IntegrityError:
                 #print 'found a duplicate'
                 #this will be where I do a comparison and throttle appropriately...
-                query = 'REPLACE INTO conns (sourceip, sourceport, destip, destport, rttavg, cwnd, sendrate, retrans) VALUES(\"'+ips[0]+'\", \"'+ips[1]+'\", \"'+ports[0][2:]+'\", \"'+ports[1][2:]+'\", '+rtt+', '+cwnd+', '+sendrate+', '+retrans+')'
+                query = 'REPLACE INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+')'
                 c.execute(query)
             #c.execute('SELECT * FROM conns')
             #print c.fetchall()
@@ -265,10 +276,11 @@ def dbinit():
 		try:
 			c.execute('''CREATE TABLE conns (
 				sourceip    text    NOT NULL,
-				sourceport  int    NOT NULL,
 				destip      text    NOT NULL,
+				sourceport  int    NOT NULL,
 				destport    int    NOT NULL,
 				rttavg      real,
+                wscaleavg   real,
 				cwnd		int,
 				sendrate    real,
 				retrans     int,
@@ -278,10 +290,11 @@ def dbinit():
 			c.execute('''DROP TABLE conns''')
 			c.execute('''CREATE TABLE conns (
 				sourceip    text    NOT NULL,
-				sourceport  int    NOT NULL,
 				destip      text    NOT NULL,
+				sourceport  int    NOT NULL,
 				destport    int    NOT NULL,
 				rttavg      real,
+                wscaleavg   real,
 				cwnd		int,
 				sendrate    real,
 				retrans     int,
@@ -334,11 +347,11 @@ def parsetcp(connections):
             destport = int(destport,16)
             retrans = connection[6]
             #print sourceip, sourceport, destip, destport, retrans
-            #query = 'SELECT * FROM conns WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
+            #query = 'SELECT * FROM conns WHERE sourceip = \'{sip}\' AND sourceport = \'{spo}\' AND destip = \'{dip}\' AND destport = \'{dpo}\''.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
             #print query
             #c.execute(query)
             #print(c.fetchall())
-            query = 'UPDATE conns SET retrans = {retr} WHERE sourceip = \"{sip}\" AND sourceport = \"{spo}\" AND destip = \"{dip}\" AND destport = \"{dpo}\"'.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
+            query = 'UPDATE conns SET retrans={retr} WHERE sourceip=\'{sip}\' AND sourceport=\'{spo}\' AND destip=\'{dip}\' AND destport=\'{dpo}\''.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
             #print query
             c.execute(query)
             c.execute('SELECT * FROM conns')
