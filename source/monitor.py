@@ -17,9 +17,9 @@ import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct
 #from argparse import RawDescriptionHelpFormatter
 
 __all__ = []
-__version__ = 0.1
+__version__ = 0.7
 __date__ = '2015-06-22'
-__updated__ = '2015-08-24'
+__updated__ = '2015-08-27'
 
 SPEEDCLASSES = [(900,'1:2'),(4900,'1:3'),(9900,'1:4')]
 
@@ -227,14 +227,23 @@ def parseconnections(connections):
             sendrate = '-1'
         if len(ips) > 1 and len(ports) > 1 and rtt and cwnd and retrans and sendrate:
         #Assemble Query String
-            query = 'INSERT INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+')'
+            query = 'INSERT INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans, intervals) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+',0)'
             #print query
             try:
                 c.execute(query)
             except sqlite3.IntegrityError:
-                #print 'found a duplicate'
+                intervalquery = 'SELECT intervals FROM conns WHERE sourceip = \'{sip}\' AND sourceport = {spo} AND destip = \'{dip}\' AND destport = {dpo}'.format(sip=ips[0], spo=ports[0][2:], dip=ips[1], dpo=ports[1][2:])
+                print intervalquery
+                c.execute(intervalquery)
+                intervals = c.fetchall()
+                print intervals
+                if len(intervals)==0:
+                    intervals = 0
+                else:
+                    intervals = int(intervals[0][0])
+                intervals += 1
                 #this will be where I do a comparison and throttle appropriately...
-                query = 'REPLACE INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+')'
+                query = 'REPLACE INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans, intervals) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+', '+str(intervals)+')'
                 c.execute(query)
             #c.execute('SELECT * FROM conns')
             #print c.fetchall()
@@ -284,6 +293,7 @@ def dbinit():
 				cwnd		int,
 				sendrate    real,
 				retrans     int,
+                intervals   int,
 				PRIMARY KEY (sourceip, sourceport, destip, destport));''')
 		except sqlite3.OperationalError:
 			print 'I don\'t know you. Recreating Database.'
@@ -298,6 +308,7 @@ def dbinit():
 				cwnd		int,
 				sendrate    real,
 				retrans     int,
+                intervals   int,
 				PRIMARY KEY (sourceip, sourceport, destip, destport));''')
 	conn.commit()
 	conn.close()
@@ -370,7 +381,6 @@ def doconns():
     parseconnections(connections)
     tcpconns = polltcp()
     parsetcp(tcpconns)
-    print datetime.datetime.now()
     threading.Timer(5, doconns).start()
 
 def main(argv=None): # IGNORE:C0111
