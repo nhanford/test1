@@ -12,7 +12,7 @@ It defines classes_and_methods
 '''
 
 #print 'debug'
-import sys,os,re,subprocess,socket,sched,time,threading,sqlite3,struct
+import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct
 #from argparse import ArgumentParser
 #from argparse import RawDescriptionHelpFormatter
 
@@ -350,7 +350,7 @@ def parsetcp(connections):
             query = 'SELECT retrans FROM conns WHERE sourceip = \'{sip}\' AND sourceport = {spo} AND destip = \'{dip}\' AND destport = {dpo}'.format(sip=sourceip, spo=sourceport, dip=destip, dpo=destport)
             c.execute(query)
             tempretr = c.fetchall()
-            print tempretr
+            #print tempretr
             if len(tempretr)==0:
                 tempretr = 0
             else:
@@ -359,9 +359,9 @@ def parsetcp(connections):
             query = 'UPDATE conns SET retrans={retr} WHERE sourceip=\'{sip}\' AND sourceport=\'{spo}\' AND destip=\'{dip}\' AND destport=\'{dpo}\''.format(retr=int(retrans), sip=str(sourceip), spo=str(sourceport), dip=str(destip), dpo=str(destport))
             #print query
             c.execute(query)
-            c.execute('SELECT * FROM conns')
-            print c.fetchall()
-            print '-----------'
+            #c.execute('SELECT * FROM conns')
+            #print c.fetchall()
+            #print '-----------'
     conn.commit()
     conn.close()
 
@@ -370,6 +370,7 @@ def doconns():
     parseconnections(connections)
     tcpconns = polltcp()
     parsetcp(tcpconns)
+    print datetime.datetime.now()
     threading.Timer(5, doconns).start()
 
 def main(argv=None): # IGNORE:C0111
