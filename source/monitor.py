@@ -232,7 +232,15 @@ def parseconnections(connections):
             try:
                 c.execute(query)
             except sqlite3.IntegrityError:
-                intervalquery = 'SELECT intervals FROM conns WHERE sourceip = \'{sip}\' AND sourceport = {spo} AND destip = \'{dip}\' AND destport = {dpo}'.format(sip=ips[0], spo=ports[0][2:], dip=ips[1], dpo=ports[1][2:])
+                intervalquery = '''SELECT intervals FROM conns WHERE
+                sourceip = \'{sip}\' AND
+                sourceport = {spo} AND
+                destip = \'{dip}\' AND
+                destport = {dpo}'''.format(
+                    sip=ips[0],
+                    spo=ports[0][2:],
+                    dip=ips[1],
+                    dpo=ports[1][2:])
                 print intervalquery
                 c.execute(intervalquery)
                 intervals = c.fetchall()
@@ -243,7 +251,38 @@ def parseconnections(connections):
                     intervals = int(intervals[0][0])
                 intervals += 1
                 #this will be where I do a comparison and throttle appropriately...
-                query = 'REPLACE INTO conns (sourceip, destip, sourceport, destport, rttavg, wscaleavg, cwnd, sendrate, retrans, intervals) VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+', '+str(intervals)+')'
+                query = '''REPLACE INTO conns (
+                    sourceip,
+                    destip,
+                    sourceport,
+                    destport,
+                    rttavg,
+                    wscaleavg,
+                    cnd,
+                    sendrate,
+                    retrans,
+                    intervals)
+                VALUES(
+                    {sip},
+                    {dip},
+                    {spo},
+                    {dpo},
+                    {rt},
+                    {wsc},
+                    {cwnd},
+                    {sr},
+                    {retr},
+                    {intv},
+                )'''.format(
+                    sip=ips[0],
+                    dip=ips[1],
+                    spo=ports[0][2:],
+                    dpo=ports[1][2:],
+                    rt=rtt,
+                    wsc=wscaleavg,
+                    cnd=cwnd,
+                )
+                #VALUES(\''+ips[0]+'\', \''+ips[1]+'\', '+ports[0][2:]+', '+ports[1][2:]+', '+rtt+', '+wscaleavg+', '+cwnd+', '+sendrate+', '+retrans+', '+str(intervals)+')'''
                 c.execute(query)
             #c.execute('SELECT * FROM conns')
             #print c.fetchall()
