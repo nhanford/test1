@@ -180,22 +180,25 @@ def loadconnections(connections):
         try:
             ips, ports, rtt, wscaleavg, cwnd, retrans, sendrate = parseconnection(connection)
             iface = findiface(ips[1])
-            flownum = 0
         except ValueError:
             continue
-        dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1])
-        intervals = dbselectval(c, ips[0], ips[1], ports[0], ports[1], 'intervals')
-        if len(intervals)==0:
-            intervals = 0
-        else:
-            intervals = int(intervals[0][0])
-        intervals += 1
-        oldrtt = dbselectval(c, ips[0], ips[1], ports[0], ports[1], 'rttavg')
-        if len(oldrtt)>0:
-            oldrtt = int(oldrtt[0][0])
-            if oldrtt>0 and oldrtt<rtt:
-                rtt = oldrtt
-        dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface, flownum)
+        try:
+            dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,0,0)
+        except sqlite3.IntegrityError:
+            flownum,recent = dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1])
+            if not recent:
+                flownum+=1
+                dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,0,flownum)
+            else:
+                intervals = int(dbselectval(c,ips[0],ips[1],ports[0],ports[1],'intervals'))
+                if intervals >= 0:
+                    intervals += 1
+                else:
+                    intervals = 0
+                oldrtt = int(dbselectval(c,ips[0],ips[1],ports[0],ports[1],'rttavg'))
+                if oldrtt>0 and oldrtt<rtt:
+                    rtt = oldrtt
+                dbreplaceconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,intervals,flownum)
     conn.commit()
     conn.close()
     return
@@ -213,7 +216,11 @@ def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
             spo=sourceport,
             dpo=destport)
     cur.execute(query)
-    return(cur.fetchall())
+    out = cur.fetchall()
+    if len(out)>0:
+        return int(out[0][0]), True
+    else:
+        return int(dbselectval(cur, sourceip, destip, sourceport, destport, 'flownum')), False
 
 def isip6(ip):
     try:
@@ -231,13 +238,12 @@ def findiface(ip):
     if ip6 == -1:
         return -1
     elif ip6:
-        #try:
         dev = subprocess.check_output(['ip','-6','route','get',ip])
+        dev = re.search('dev\s+\S+',dev).group(0).split()[1]
         return dev
-        #except:
-        #    return -1
     else:
         dev = subprocess.check_output(['ip','route','get',ip])
+        dev = re.search('dev\s+\S+',dev).group(0).split()[1]
         return dev
 
 def parseconnection(connection):
@@ -279,7 +285,7 @@ def parseconnection(connection):
     else:
         raise ValueError('Not enough values to search.')
 
-def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, flownum):
+def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, intervals, flownum):
     query = '''INSERT INTO conns (
         sourceip,
         destip,
@@ -307,7 +313,7 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
             {cnd},
             {sr},
             {retr},
-            0,
+            {intv},
             datetime(CURRENT_TIMESTAMP),
             datetime(CURRENT_TIMESTAMP))'''.format(
             sip=sourceip,
@@ -320,7 +326,39 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
             wsc=wscaleavg,
             cnd=cwnd,
             sr=sendrate,
-            retr=retrans)
+            retr=retrans,
+            intv=intervals)
+    cur.execute(query)
+    return
+
+def dbreplaceconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, intervals, flownum):
+    query = '''UPDATE conns SET
+    iface = \'{ifa}\',
+    rttavg = {rt},
+    wscaleavg = {wsc},
+    cwnd = {cnd},
+    sendrate = {sr},
+    retrans = {retr},
+    intervals = {intv},
+    modified = datetime(CURRENT_TIMESTAMP)
+    WHERE
+    sourceip = \'{sip}\' AND
+    destip = \'{dip}\' AND
+    sourceport = {spo} AND
+    destport = {dpo} AND
+    flownum = {fnm}'''.format(
+        sip=sourceip,
+        dip=destip,
+        spo=sourceport,
+        dpo=destport,
+        fnm=flownum,
+        ifa=iface,
+        rt=rtt,
+        wsc=wscaleavg,
+        cnd=cwnd,
+        sr=sendrate,
+        retr=retrans,
+        intv=intervals)
     cur.execute(query)
     return
 
@@ -336,7 +374,10 @@ def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
         spo=sourceport,
         dpo=destport)
     cur.execute(query)
-    return(cur.fetchall())
+    out = cur.fetchall()
+    if len(out)>0:
+        return out[0][0]
+    return -1
 
 def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, updateval):
     if type(updateval) == str:
@@ -356,54 +397,30 @@ def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, update
     return
 
 def dbinit():
-	conn = sqlite3.connect('connections.db')
-	c = conn.cursor()
-	try:
-		c.execute('''SELECT * FROM conns''')
-		#print 'worked'
-	except sqlite3.OperationalError:
-		print 'Table doesn\'t exist; Creating table...'
-	#c.execute('''CREATE TABLE conns (state text,
-	#    recvq       int,
-	#    sendq       int,
-	#    sourceip    text    NOT NULL,
-	#    sourceport  text    NOT NULL,
-	#    destip      text    NOT NULL,
-	#    destport    text    NOT NULL,
-	#    iface       text,
-	#    tcp         text,
-	#    wscaleavg   int,
-	#    wscalemax   int,
-	#    rto         int,
-	#    rttavg      real,
-	#    ato         int,
-	#    mss         int,
-	#    cwnd        int,
-	#    ssthresh    int,
-	#    sendrate    real,
-	#    pacrate     real,
-	#    retrans     int,
-	#    rcvrtt      int,
-	#    rcvspace    int,
-	#    PRIMARY KEY (sourceip, sourceport, destip, destport));''')
-    	c.execute('''CREATE TABLE conns (
-    		sourceip    text    NOT NULL,
-    		destip      text    NOT NULL,
-    		sourceport  int     NOT NULL,
-    		destport    int     NOT NULL,
+    conn = sqlite3.connect('connections.db')
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT * FROM conns''')
+    except sqlite3.OperationalError:
+        print 'Table doesn\'t exist; Creating table...'
+        c.execute('''CREATE TABLE conns (
+            sourceip    text    NOT NULL,
+            destip      text    NOT NULL,
+            sourceport  int     NOT NULL,
+            destport    int     NOT NULL,
             flownum     int     NOT NULL,
             iface       text,
-    		rttavg      real,
+            rttavg      real,
             wscaleavg   real,
-    		cwnd		int,
-    		sendrate    real,
-    		retrans     int,
+            cwnd        int,
+            sendrate    real,
+            retrans     int,
             intervals   int,
             created     datetime,
             modified    datetime,
-    		PRIMARY KEY (sourceip, sourceport, destip, destport, flownum));''')
-	conn.commit()
-	conn.close()
+            PRIMARY KEY (sourceip, sourceport, destip, destport, flownum));''')
+    conn.commit()
+    conn.close()
 
 def throttleoutgoing(iface,ipaddr,speedclass):
     success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
@@ -514,7 +531,7 @@ USAGE
 #        sys.stderr.write(program_name + ': ' + repr(e) + '\n')
 #        sys.stderr.write(indent + '  for help use --help'+'\n')
 #        return 2
-	#print 'debug'
+    #print 'debug'
     dbinit()
     #checkibalance()
     #numcpus = pollcpu()
