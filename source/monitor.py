@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # encoding: utf-8
 '''
-interrupts -- Deals with affinity and flow throttling using the proc file system and tc, respectively.
+monitor -- Monitors DTN flow data and stores the results in a sqlite database.
 
-It defines classes_and_methods
+monitor is designed for Ubuntu and CentOS Linux running Python 2.7
 
 @author:     Nathan Hanford
 
@@ -11,37 +11,20 @@ It defines classes_and_methods
 @deffield    updated: Updated
 '''
 
-#print 'debug'
-import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct
-#from argparse import ArgumentParser
-#from argparse import RawDescriptionHelpFormatter
+import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct,argparse
 
 __all__ = []
-__version__ = 0.7
+__version__ = 0.8
 __date__ = '2015-06-22'
-__updated__ = '2015-08-27'
+__updated__ = '2015-09-01'
 
-SPEEDCLASSES = [(900,'1:2'),(4900,'1:3'),(9900,'1:4')]
+SPEEDCLASSES = [(800,'1:2',1000),(4500,'1:3',5000),(9500,'1:4',10000)]
 
 DEBUG = 0
 TESTRUN = 0
 
-#class DB(object):
-#    _db_conn = None
-#    _db_c = None
-#
-#    def __init__(self):
-#        self._db_conn = sqlite3.connect('connections.db')
-#        self._db_c = self.conn.cursor()
-#
-#    def query(self, query, params):
-#        return self._db_c.execute(query, params)
-#
-#    def __del__(self):
-#        self._db_conn.close()
-#
 class CLIError(Exception):
-    '''Generic exception to raise and log different fatal errors.'''
+    '''generic exception to raise and log different fatal errors'''
     def __init__(self, msg):
         super(CLIError).__init__(type(self))
         self.msg = 'E: %s' % msg
@@ -49,9 +32,61 @@ class CLIError(Exception):
         return self.msg
     def __unicode__(self):
         return self.msg
-#Here are the functions that poll the proc filesystem, etc.
-#So there are a lot of issues with the below, but I'm not going to address them just yet..
+
+class ProcError(Exception):
+    '''
+    generic exception to raise and log errors from accessing procfs
+    These errors are fatal to the affinity tuning components and some monitoring components.
+    '''
+    def __init__(self, msg):
+        super(CLIError).__init__(type(self))
+        self.msg = 'E: %s' % msg
+    def __str__(self):
+        return self.msg
+    def __unicode__(self):
+        return self.msg
+
+class DBError(Exception):
+    '''
+    generic exception to handle errors from the database
+    These errors may be fatal to the ability to record flow data.
+    '''
+    def __init__(self, msg):
+        super(CLIError).__init__(type(self))
+        self.msg = 'E: %s' % msg
+    def __str__(self):
+        return self.msg
+    def __unicode__(self):
+        return self.msg
+
+class SSError(Exception):
+    '''
+    generic exception to handle errors from ss
+    These errors are fatal to the monitoring components.
+    '''
+    def __init__(self, msg):
+        super(CLIError).__init__(type(self))
+        self.msg = 'E: %s' % msg
+    def __str__(self):
+        return self.msg
+    def __unicode__(self):
+        return self.msg
+
+class TCError(Exception):
+    '''
+    generic exception to handle errors from tc
+    These errors are fatal to the throttling components.
+    '''
+    def __init__(self, msg):
+        super(CLIError).__init__(type(self))
+        self.msg = 'E: %s' % msg
+    def __str__(self):
+        return self.msg
+    def __unicode__(self):
+        return self.msg
+
 def checkibalance():
+    '''attempts to disable irqbalance'''
     try:
         stat = subprocess.check_call(['service','irqbalance','stop'])
     except subprocess.CalledProcessError:
@@ -59,8 +94,8 @@ def checkibalance():
         return 1
     return 0
 
-
 def pollcpu():
+    '''determines the number of cpus in the system'''
     try:
         file = open('/proc/cpuinfo','r')
     except IOError:
@@ -74,6 +109,7 @@ def pollcpu():
     return numcpus
 
 def pollaffinity(irqlist):
+    '''determines the current affinity scenario'''
     affinity = dict()
     for i in irqlist:
         file = open('/proc/irq/'+i+'/smp_affinity','r')
@@ -82,9 +118,10 @@ def pollaffinity(irqlist):
     return affinity
 
 def pollirq(iface):
-    file = open('/proc/interrupts','r')
+    '''determines the irq numbers of the given interface'''
+    irqfile = open('/proc/interrupts','r')
     irqlist=[]
-    for line in file:
+    for line in irqfile:
         line.strip()
         line = re.search('.+'+iface,line)
         if(line):
@@ -95,8 +132,8 @@ def pollirq(iface):
         return irqlist
     driver = subprocess.check_output(['ethtool','-i',iface])
     if 'mlx4' in driver:
-        file.seek(0)
-        for line in file:
+        irqfile.seek(0)
+        for line in irqfile:
             line.strip()
             line = re.search('.+'+'mlx4',line)
             if(line):
@@ -105,10 +142,10 @@ def pollirq(iface):
                 irqlist.append(line.group(0))
         return irqlist
     print 'Cannot find this interface\'s irq numbers.'
-    exit()
-    #yeah I know that's sloppy; will fix by raising an exception when I get my exception hierarchy figured out.
+    return
 
 def setaffinity(affy,numcpus):
+    '''naively sets the affinity based on industry best practices for a multiqueue NIC'''
     numdigits = numcpus/4
     mask = 1
     irqcount = 0
@@ -130,6 +167,7 @@ def setaffinity(affy,numcpus):
     return
 
 def setperformance(numcpus):
+    '''sets all cpus to performance mode'''
     for i in range(numcpus):
         try:
             throttle = open('/sys/devices/system/cpu/cpu'+i+'/cpufreq/scaling_governor', 'w')
@@ -139,7 +177,9 @@ def setperformance(numcpus):
             print 'Could not set CPUs to performance'
     return
 
+#this is idiotic
 def getlinerate(iface):
+    '''uses ethtool to determine the linerate of the selected interface'''
     out = subprocess.check_output(['ethtool',iface])
     speed = re.search('.+Speed:.+',out)
     speed = re.sub('.+Speed:\s','',speed.group(0))
@@ -150,6 +190,7 @@ def getlinerate(iface):
     return speed
 
 def setthrottles(iface):
+    '''sets predefined common throttles in tc'''
     try:
         stat = subprocess.check_call(['tc','qdisc','del','dev',iface,'root'])
     except subprocess.CalledProcessError as e:
@@ -171,39 +212,52 @@ def setthrottles(iface):
             return
     return
 
-# Parse the list of active connections returned by ss
-# Check and sanitize ss input, and then return typed values.
 def loadconnections(connections):
+    '''oversees pushing the connections into the database'''
     conn = conn = sqlite3.connect('connections.db')
     c = conn.cursor()
+    numnew,numupdated = 0,0
     for connection in connections:
         try:
             ips, ports, rtt, wscaleavg, cwnd, retrans, sendrate = parseconnection(connection)
+            if rtt<0:
+                print connection,'had an invalid rtt.'
+            if wscaleavg<0:
+                print connection,'had an invalid wscaleavg.'
+            if cwnd<0:
+                print connection,'had an invalid cwnd.'
+            if retrans<0:
+                print connection,'had an invalid retrans.'
+            if sendrate<0:
+                print connection,'had an invalid sendrate.'
             iface = findiface(ips[1])
         except ValueError:
             continue
         try:
             dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,0,0)
+            numnew +=1
         except sqlite3.IntegrityError:
             flownum,recent = dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1])
             if not recent:
                 flownum+=1
                 dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,0,flownum)
+                numnew +=1
             else:
                 intervals = int(dbselectval(c,ips[0],ips[1],ports[0],ports[1],'intervals'))
-                if intervals >= 0:
-                    intervals += 1
-                else:
-                    intervals = 0
+                intervals += 1
                 oldrtt = int(dbselectval(c,ips[0],ips[1],ports[0],ports[1],'rttavg'))
-                if oldrtt>0 and oldrtt<rtt:
+                if 0<oldrtt<rtt:
                     rtt = oldrtt
                 dbreplaceconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,intervals,flownum)
+                numupdated +=1
     conn.commit()
     conn.close()
+    print '{numn} new connections loaded and {numu} connections updated at time {when}'.format(numn=numnew, numu=numupdated,
+        when=datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'))
     return
 
 def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
+    '''checks to see if this flow has been recently seen'''
     query = '''SELECT flownum FROM conns WHERE
         sourceip = \'{sip}\' AND
         destip = \'{dip}\' AND
@@ -223,6 +277,7 @@ def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
         return int(dbselectval(cur, sourceip, destip, sourceport, destport, 'flownum')), False
 
 def isip6(ip):
+    '''determines if an ip address is v4 or v6'''
     try:
         socket.inet_aton(ip)
         return False
@@ -234,6 +289,7 @@ def isip6(ip):
             return -1
 
 def findiface(ip):
+    '''determines the interface responsible for a particular ip address'''
     ip6 = isip6(ip)
     if ip6 == -1:
         return -1
@@ -273,7 +329,7 @@ def parseconnection(connection):
         retrans = re.sub('retrans:\d+\/','',retrans)
     else:
         retrans = '0'
-    sendrate = re.search('send \d+.\d+',connection)
+    sendrate = re.search('send \d+.\d+[A-z]',connection)
     if sendrate:
         sendrate = sendrate.group(0)[5:]
     else:
@@ -286,6 +342,7 @@ def parseconnection(connection):
         raise ValueError('Not enough values to search.')
 
 def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, intervals, flownum):
+    '''assembles a query and creates a corresponding row in the database'''
     query = '''INSERT INTO conns (
         sourceip,
         destip,
@@ -332,6 +389,7 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
     return
 
 def dbreplaceconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, intervals, flownum):
+    '''assembles a query and updates the corresponding row in the database'''
     query = '''UPDATE conns SET
     iface = \'{ifa}\',
     rttavg = {rt},
@@ -363,6 +421,7 @@ def dbreplaceconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, c
     return
 
 def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
+    '''returns the \'latest\' particular value from the database'''
     query = '''SELECT {sval} FROM conns WHERE
     sourceip = \'{sip}\' AND
     destip = \'{dip}\' AND
@@ -380,6 +439,7 @@ def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
     return -1
 
 def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, updateval):
+    '''updates a particular value in the database: unused'''
     if type(updateval) == str:
         updateval = '\''+updateval+'\''
     query = '''UPDATE conns SET {ufield}={uval} WHERE
@@ -397,6 +457,7 @@ def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, update
     return
 
 def dbinit():
+    '''initializes the database and creates the table, if one doesn't exist already'''
     conn = sqlite3.connect('connections.db')
     c = conn.cursor()
     try:
@@ -423,10 +484,12 @@ def dbinit():
     conn.close()
 
 def throttleoutgoing(iface,ipaddr,speedclass):
+    '''throttles an outgoing flow'''
     success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
     return success
 
 def pollss():
+    '''gets data from ss'''
     out = subprocess.check_output(['ss','-i','-t','-n'])
     out = re.sub('\A.+\n','',out)
     out = re.sub('\n\t','',out)
@@ -434,6 +497,7 @@ def pollss():
     return out
 
 def polltcp():
+    '''gets data from /proc/net/tcp'''
     tcp = open('/proc/net/tcp','r')
     out = tcp.readlines()
     out = out[1:]
@@ -446,13 +510,13 @@ def polltcp():
     return out
 
 def parsetcp(connections):
+    '''parses the data from /proc/net/tcp'''
     conn = sqlite3.connect('connections.db')
     c = conn.cursor()
     for connection in connections:
         connection = connection.strip()
         connection = connection.split()
         if connection[1] != '00000000:0000' and connection[2] != '00000000:0000':
-            #print connection
             sourceip = connection[1].split(':')[0]
             sourceport = connection[1].split(':')[1]
             sourceip = int(sourceip,16)
@@ -466,7 +530,6 @@ def parsetcp(connections):
             destip = socket.inet_ntoa(destip)
             destport = int(destport,16)
             retrans = int(connection[6],16)
-            #print sourceip, sourceport, destip, destport, retrans
             query = '''SELECT retrans FROM conns WHERE
                 sourceip = \'{sip}\' AND
                 sourceport = {spo} AND
@@ -489,6 +552,7 @@ def parsetcp(connections):
     conn.close()
 
 def doconns():
+    '''manages the periodic collection of ss and procfs data'''
     connections = pollss()
     loadconnections(connections)
     tcpconns = polltcp()
@@ -513,25 +577,23 @@ def main(argv=None): # IGNORE:C0111
 USAGE
 ''' % (program_shortdesc)
 
-#    try:
+    try:
         # Setup argument parser
-#        parser = ArgumentParser(description=program_license, formatter_class=RawDescriptionHelpFormatter)
+        parser = argparse.ArgumentParser(description=program_license, formatter_class=argparse.RawDescriptionHelpFormatter)
         #parser.add_argument('interface', metavar='interface', action='store', help='specify the interface name of your network controller (i.e. eth1)')
         # Process arguments
-#        args = parser.parse_args()
+        args = parser.parse_args()
         #interface = args.interface
-
-#    except KeyboardInterrupt:
-#        print 'Operation Cancelled\n'
-#        return 0
-#    except Exception, e:
-#        if DEBUG or TESTRUN:
-#            raise(e)
-#        indent = len(program_name) * ' '
-#        sys.stderr.write(program_name + ': ' + repr(e) + '\n')
-#        sys.stderr.write(indent + '  for help use --help'+'\n')
-#        return 2
-    #print 'debug'
+    except KeyboardInterrupt:
+        print 'Operation Cancelled\n'
+        return 0
+    except Exception, e:
+        if DEBUG or TESTRUN:
+            raise(e)
+        indent = len(program_name) * ' '
+        sys.stderr.write(program_name + ': ' + repr(e) + '\n')
+        sys.stderr.write(indent + '  for help use --help'+'\n')
+        return 2
     dbinit()
     #checkibalance()
     #numcpus = pollcpu()
