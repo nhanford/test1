@@ -27,7 +27,7 @@ class CLIError(Exception):
     '''generic exception to raise and log different fatal errors'''
     def __init__(self, msg):
         super(CLIError).__init__(type(self))
-        self.msg = 'E: %s' % msg
+        self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
     def __unicode__(self):
@@ -39,8 +39,8 @@ class ProcError(Exception):
     These errors are fatal to the affinity tuning components and some monitoring components.
     '''
     def __init__(self, msg):
-        super(CLIError).__init__(type(self))
-        self.msg = 'E: %s' % msg
+        super(ProcError).__init__(type(self))
+        self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
     def __unicode__(self):
@@ -52,8 +52,8 @@ class DBError(Exception):
     These errors may be fatal to the ability to record flow data.
     '''
     def __init__(self, msg):
-        super(CLIError).__init__(type(self))
-        self.msg = 'E: %s' % msg
+        super(DBError).__init__(type(self))
+        self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
     def __unicode__(self):
@@ -65,8 +65,8 @@ class SSError(Exception):
     These errors are fatal to the monitoring components.
     '''
     def __init__(self, msg):
-        super(CLIError).__init__(type(self))
-        self.msg = 'E: %s' % msg
+        super(SSError).__init__(type(self))
+        self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
     def __unicode__(self):
@@ -78,8 +78,8 @@ class TCError(Exception):
     These errors are fatal to the throttling components.
     '''
     def __init__(self, msg):
-        super(CLIError).__init__(type(self))
-        self.msg = 'E: %s' % msg
+        super(TCError).__init__(type(self))
+        self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
     def __unicode__(self):
@@ -89,9 +89,8 @@ def checkibalance():
     '''attempts to disable irqbalance'''
     try:
         stat = subprocess.check_call(['service','irqbalance','stop'])
-    except subprocess.CalledProcessError:
-        print 'Cound not stop irqbalance'
-        return 1
+    except subprocess.CalledProcessError as e:
+        raise TCError(e,'Failed to stop irqbalance')
     return 0
 
 def pollcpu():
@@ -105,7 +104,7 @@ def pollcpu():
         line.strip()
         if re.search('processor',line):
             numcpus +=1
-    file.close
+    file.close()
     return numcpus
 
 def pollaffinity(irqlist):
@@ -153,7 +152,7 @@ def setaffinity(affy,numcpus):
         if irqcount > numcpus - 1:
             mask = 1
             irqcount = 0
-        strmask = '%x' % mask
+        strmask = '%x'.format(mask)
         while len(strmask)<numdigits:
             strmask = '0'+strmask
         mask = mask << 1
@@ -219,7 +218,7 @@ def loadconnections(connections):
     numnew,numupdated = 0,0
     for connection in connections:
         try:
-            ips, ports, rtt, wscaleavg, cwnd, retrans, sendrate = parseconnection(connection)
+            ips, ports, rtt, wscaleavg, cwnd, retrans = parseconnection(connection)
             if rtt<0:
                 print connection,'had an invalid rtt.'
             if wscaleavg<0:
@@ -228,19 +227,17 @@ def loadconnections(connections):
                 print connection,'had an invalid cwnd.'
             if retrans<0:
                 print connection,'had an invalid retrans.'
-            if sendrate<0:
-                print connection,'had an invalid sendrate.'
             iface = findiface(ips[1])
         except ValueError:
             continue
         try:
-            dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,0,0)
+            dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,0,0)
             numnew +=1
         except sqlite3.IntegrityError:
             flownum,recent = dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1])
             if not recent:
                 flownum+=1
-                dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,0,flownum)
+                dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,0,flownum)
                 numnew +=1
             else:
                 intervals = int(dbselectval(c,ips[0],ips[1],ports[0],ports[1],'intervals'))
@@ -248,12 +245,12 @@ def loadconnections(connections):
                 oldrtt = int(dbselectval(c,ips[0],ips[1],ports[0],ports[1],'rttavg'))
                 if 0<oldrtt<rtt:
                     rtt = oldrtt
-                dbreplaceconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,sendrate,retrans,iface,intervals,flownum)
+                dbupdateconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,intervals,flownum)
                 numupdated +=1
     conn.commit()
     conn.close()
     print '{numn} new connections loaded and {numu} connections updated at time {when}'.format(numn=numnew, numu=numupdated,
-        when=datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'))
+        when=datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%s'))
     return
 
 def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
@@ -329,19 +326,19 @@ def parseconnection(connection):
         retrans = re.sub('retrans:\d+\/','',retrans)
     else:
         retrans = '0'
-    sendrate = re.search('send \d+.\d+[A-z]',connection)
-    if sendrate:
-        sendrate = sendrate.group(0)[5:]
-    else:
-        sendrate = '-1'
-    if len(ips) > 1 and len(ports) > 1 and rtt and wscaleavg and cwnd and retrans and sendrate:
+    #sendrate = re.search('send \d+.\d+[A-z]',connection)
+    #if sendrate:
+    #    sendrate = sendrate.group(0)[5:]
+    #else:
+    #    sendrate = '-1'
+    if len(ips) > 1 and len(ports) > 1 and rtt and wscaleavg and cwnd and retrans:
         ports[0] = ports[0][2:]
         ports[1] = ports[1][2:]
-        return ips, ports, rtt, wscaleavg, cwnd, retrans, sendrate
+        return ips, ports, rtt, wscaleavg, cwnd, retrans
     else:
         raise ValueError('Not enough values to search.')
 
-def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, intervals, flownum):
+def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, retrans, iface, intervals, flownum):
     '''assembles a query and creates a corresponding row in the database'''
     query = '''INSERT INTO conns (
         sourceip,
@@ -353,7 +350,6 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
         rttavg,
         wscaleavg,
         cwnd,
-        sendrate,
         retrans,
         intervals,
         created,
@@ -368,7 +364,6 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
             {rt},
             {wsc},
             {cnd},
-            {sr},
             {retr},
             {intv},
             datetime(CURRENT_TIMESTAMP),
@@ -382,20 +377,18 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
             rt=rtt,
             wsc=wscaleavg,
             cnd=cwnd,
-            sr=sendrate,
             retr=retrans,
             intv=intervals)
     cur.execute(query)
     return
 
-def dbreplaceconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, sendrate, retrans, iface, intervals, flownum):
+def dbupdateconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, retrans, iface, intervals, flownum):
     '''assembles a query and updates the corresponding row in the database'''
     query = '''UPDATE conns SET
     iface = \'{ifa}\',
     rttavg = {rt},
     wscaleavg = {wsc},
     cwnd = {cnd},
-    sendrate = {sr},
     retrans = {retr},
     intervals = {intv},
     modified = datetime(CURRENT_TIMESTAMP)
@@ -414,7 +407,6 @@ def dbreplaceconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, c
         rt=rtt,
         wsc=wscaleavg,
         cnd=cwnd,
-        sr=sendrate,
         retr=retrans,
         intv=intervals)
     cur.execute(query)
@@ -439,7 +431,7 @@ def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
     return -1
 
 def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, updateval):
-    '''updates a particular value in the database: unused'''
+    '''updates a particular value in the database'''
     if type(updateval) == str:
         updateval = '\''+updateval+'\''
     query = '''UPDATE conns SET {ufield}={uval} WHERE
@@ -474,7 +466,6 @@ def dbinit():
             rttavg      real,
             wscaleavg   real,
             cwnd        int,
-            sendrate    real,
             retrans     int,
             intervals   int,
             created     datetime,
@@ -530,22 +521,7 @@ def parsetcp(connections):
             destip = socket.inet_ntoa(destip)
             destport = int(destport,16)
             retrans = int(connection[6],16)
-            query = '''SELECT retrans FROM conns WHERE
-                sourceip = \'{sip}\' AND
-                sourceport = {spo} AND
-                destip = \'{dip}\' AND
-                destport = {dpo}'''.format(
-                    sip=sourceip,
-                    spo=sourceport,
-                    dip=destip,
-                    dpo=destport)
-            c.execute(query)
-            tempretr = c.fetchall()
-            #print tempretr
-            if len(tempretr)==0:
-                tempretr = 0
-            else:
-                tempretr = int(tempretr[0][0])
+            tempretr = int(dbselectval(c,sourceip,destip,sourceport,destport,'retrans'))
             retrans += tempretr
             dbupdateval(c,sourceip, destip, sourceport, destport, 'retrans',retrans)
     conn.commit()
@@ -559,6 +535,12 @@ def doconns():
     parsetcp(tcpconns)
     threading.Timer(5, doconns).start()
 
+def checkfile(parser,fname):
+    if not os.path.exists(fname):
+        parser.error('File {} doesn\'t exist'.format(fname))
+    else:
+        return open(fname,'rw')
+
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
 
@@ -567,23 +549,29 @@ def main(argv=None): # IGNORE:C0111
     else:
         sys.argv.extend(argv)
     program_name = os.path.basename(sys.argv[0])
-    program_version = 'v%s' % __version__
+    program_version = 'v{}'.format(__version__)
     program_build_date = str(__updated__)
-    program_version_message = '%%(prog)s %s (%s)' % (program_version, program_build_date)
+    program_version_message = '%%(prog)s {v} ({b})'.format(v=program_version, b=program_build_date)
     program_shortdesc = __import__('__main__').__doc__.split('\n')[1]
-    program_license = '''%s
+    program_license = '''{}
 
 
 USAGE
-''' % (program_shortdesc)
+'''.format(program_shortdesc)
 
     try:
         # Setup argument parser
         parser = argparse.ArgumentParser(description=program_license, formatter_class=argparse.RawDescriptionHelpFormatter)
-        #parser.add_argument('interface', metavar='interface', action='store', help='specify the interface name of your network controller (i.e. eth1)')
+        parser.add_argument('intervals',dest='intervals',metavar='intervals',action='store',help='Specify the monitoring interval in seconds. (min: 1, max: 60)')
+        parser.add_argument('-f',dest='filename',metavar='filename',action='store',help='Specify the filename/location of your database.')
+        parser.add_argument('-j','--json', action='store_true', help='use json rather than the default SQLite database.')
+        parser.add_argument('-i','--interface',dest='interface',action='store',help='Specify the name of the interface you wish to monitor/throttle.')
         # Process arguments
         args = parser.parse_args()
+        if args.json:
+            print 'json is on'
         #interface = args.interface
+        pass
     except KeyboardInterrupt:
         print 'Operation Cancelled\n'
         return 0
@@ -604,10 +592,7 @@ USAGE
     #setaffinity(affinity,numcpus)
     #linerate = getlinerate(interface)
     #setthrottles(interface)
-    #threading.Timer(5, doconns, [interface]).start()
     doconns()
-    #conns = pollss(interface)
-    #conns = polltcp()
 
 if __name__ == '__main__':
     if DEBUG:
@@ -616,5 +601,3 @@ if __name__ == '__main__':
         import doctest
         doctest.testmod()
     sys.exit(main())
-#    with daemon.DaemonContext():
-#        sys.exit(main())
