@@ -11,7 +11,7 @@ monitor is designed for Ubuntu and CentOS Linux running Python 2.7
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct,argparse
+import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct,argparse,json
 
 __all__ = []
 __version__ = 0.8
@@ -39,7 +39,6 @@ class ProcError(Exception):
     These errors are fatal to the affinity tuning components and some monitoring components.
     '''
     def __init__(self, msg):
-        super(ProcError).__init__(type(self))
         self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
@@ -52,7 +51,6 @@ class DBError(Exception):
     These errors may be fatal to the ability to record flow data.
     '''
     def __init__(self, msg):
-        super(DBError).__init__(type(self))
         self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
@@ -65,7 +63,6 @@ class SSError(Exception):
     These errors are fatal to the monitoring components.
     '''
     def __init__(self, msg):
-        super(SSError).__init__(type(self))
         self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
@@ -78,7 +75,6 @@ class TCError(Exception):
     These errors are fatal to the throttling components.
     '''
     def __init__(self, msg):
-        super(TCError).__init__(type(self))
         self.msg = 'E: {}'.format(msg)
     def __str__(self):
         return self.msg
@@ -96,29 +92,36 @@ def checkibalance():
 def pollcpu():
     '''determines the number of cpus in the system'''
     try:
-        file = open('/proc/cpuinfo','r')
-    except IOError:
-        print 'It appears that this system is incompatible with the proc file system\n'
+        pfile = open('/proc/cpuinfo','r')
+    except IOError as e:
+        raise ProcError(e,'Unable to read /proc/cpuinfo')
     numcpus=0
-    for line in file:
+    for line in pfile:
         line.strip()
         if re.search('processor',line):
             numcpus +=1
-    file.close()
+    pfile.close()
     return numcpus
 
 def pollaffinity(irqlist):
     '''determines the current affinity scenario'''
     affinity = dict()
     for i in irqlist:
-        file = open('/proc/irq/'+i+'/smp_affinity','r')
-        thisAffinity=file.read().strip()
+        try:
+            pfile = open('/proc/irq/{}/smp_affinity'.format(i),'r')
+        except IOError as e:
+            raise ProcError(e,'unable to read /proc/irq/{}/smp_affinity'.format(i))
+        thisAffinity=pfile.read().strip()
         affinity[i]=thisAffinity
+    pfile.close()
     return affinity
 
 def pollirq(iface):
     '''determines the irq numbers of the given interface'''
-    irqfile = open('/proc/interrupts','r')
+    try:
+        irqfile = open('/proc/interrupts','r')
+    except IOError as e:
+        raise ProcError(e,'unable to read /proc/interrupts')
     irqlist=[]
     for line in irqfile:
         line.strip()
@@ -128,6 +131,7 @@ def pollirq(iface):
             line = re.search('\d+',line.group(0))
             irqlist.append(line.group(0))
     if any(irqlist):
+        irqfile.close()
         return irqlist
     driver = subprocess.check_output(['ethtool','-i',iface])
     if 'mlx4' in driver:
@@ -139,9 +143,9 @@ def pollirq(iface):
                 line = re.search('\d+:',line.group(0))
                 line = re.search('\d+',line.group(0))
                 irqlist.append(line.group(0))
+        irqfile.close()
         return irqlist
-    print 'Cannot find this interface\'s irq numbers.'
-    return
+    raise ProcError(Exception,'unable to process /proc/interrupts')
 
 def setaffinity(affy,numcpus):
     '''naively sets the affinity based on industry best practices for a multiqueue NIC'''
@@ -157,11 +161,11 @@ def setaffinity(affy,numcpus):
             strmask = '0'+strmask
         mask = mask << 1
         try:
-            smp = open('/proc/irq/'+key+'/smp_affinity','w')
+            smp = open('/proc/irq/{}/smp_affinity'.format(key),'w')
             smp.write(strmask)
             smp.close()
-        except IOError:
-            print 'Could not write the smp_affinity file'
+        except IOError as e:
+            raise ProcError(e,'Could not write /proc/irq/{}/smp_affinity'.format(key))
         irqcount +=1
     return
 
@@ -169,23 +173,24 @@ def setperformance(numcpus):
     '''sets all cpus to performance mode'''
     for i in range(numcpus):
         try:
-            throttle = open('/sys/devices/system/cpu/cpu'+i+'/cpufreq/scaling_governor', 'w')
+            throttle = open('/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor'.format(i), 'w')
             throttle.write('performance')
             throttle.close()
-        except IOError:
-            print 'Could not set CPUs to performance'
+        except IOError as e:
+            raise ProcError(e, 'Could not write to /sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor'.format(i))
     return
 
-#this is idiotic
 def getlinerate(iface):
     '''uses ethtool to determine the linerate of the selected interface'''
-    out = subprocess.check_output(['ethtool',iface])
+    try:
+        out = subprocess.check_output(['ethtool',iface])
+    except subprocess.CalledProcessError as e:
+        raise TCError(e,'Could not get linerate for {}'.format(iface))
     speed = re.search('.+Speed:.+',out)
     speed = re.sub('.+Speed:\s','',speed.group(0))
     speed = re.sub('Mb/s','',speed)
     if 'Unknown' in speed:
-        print 'Line rate for this interface is unknown: you probably need to enable it.'
-        exit()
+        raise TCError(Exception,'Line rate for this interface is unknown: interface could be disabled')
     return speed
 
 def setthrottles(iface):
@@ -194,21 +199,18 @@ def setthrottles(iface):
         stat = subprocess.check_call(['tc','qdisc','del','dev',iface,'root'])
     except subprocess.CalledProcessError as e:
         if e.returncode != 2:
-            raise e
+            raise TCError(e,'Could not execute qdisc management on {}'.format(iface))
     try:
         subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root','htb'])
     except subprocess.CalledProcessError as e:
-        print e
-        print e.returncode
-        return
+        raise TCError(e,'Could not add root qdisc for {}'.format(iface))
     for speedclass in SPEEDCLASSES:
         print speedclass[0]
         print speedclass[1]
         try:
             subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
-        except:
-            print 'Could not interface with os to initialize tc settings.'
-            return
+        except subprocess.CalledProcessError as e:
+            raise TCError(e,'could not add class {s} for interface {i}'.format(s=speedclass[2],i=iface))
     return
 
 def loadconnections(connections):
@@ -229,6 +231,7 @@ def loadconnections(connections):
                 print connection,'had an invalid retrans.'
             iface = findiface(ips[1])
         except ValueError:
+            #connection was empty: usually localhost<-->localhost
             continue
         try:
             dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,0,0)
@@ -247,6 +250,8 @@ def loadconnections(connections):
                     rtt = oldrtt
                 dbupdateconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,intervals,flownum)
                 numupdated +=1
+        except Exception as e:
+            raise DBError(e,'could not load connection into database:\n{}'.format(connection))
     conn.commit()
     conn.close()
     print '{numn} new connections loaded and {numu} connections updated at time {when}'.format(numn=numnew, numu=numupdated,
@@ -266,8 +271,11 @@ def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
             dip=destip,
             spo=sourceport,
             dpo=destport)
-    cur.execute(query)
-    out = cur.fetchall()
+    try:
+        cur.execute(query)
+        out = cur.fetchall()
+    except Exception as e:
+        raise DBError(e,'query {} failed'.format(query))
     if len(out)>0:
         return int(out[0][0]), True
     else:
@@ -291,8 +299,11 @@ def findiface(ip):
     if ip6 == -1:
         return -1
     elif ip6:
-        dev = subprocess.check_output(['ip','-6','route','get',ip])
-        dev = re.search('dev\s+\S+',dev).group(0).split()[1]
+        try:
+            dev = subprocess.check_output(['ip','-6','route','get',ip])
+            dev = re.search('dev\s+\S+',dev).group(0).split()[1]
+        except subprocess.CalledProcessError as e:
+            raise(CalledProcessError)
         return dev
     else:
         dev = subprocess.check_output(['ip','route','get',ip])
@@ -527,13 +538,14 @@ def parsetcp(connections):
     conn.commit()
     conn.close()
 
-def doconns():
+def doconns(interval):
     '''manages the periodic collection of ss and procfs data'''
     connections = pollss()
     loadconnections(connections)
     tcpconns = polltcp()
     parsetcp(tcpconns)
-    threading.Timer(5, doconns).start()
+    threading.Timer(interval, doconns, [interval]).start()
+    return
 
 def checkfile(parser,fname):
     if not os.path.exists(fname):
@@ -562,16 +574,42 @@ USAGE
     try:
         # Setup argument parser
         parser = argparse.ArgumentParser(description=program_license, formatter_class=argparse.RawDescriptionHelpFormatter)
-        parser.add_argument('intervals',dest='intervals',metavar='intervals',action='store',help='Specify the monitoring interval in seconds. (min: 1, max: 60)')
-        parser.add_argument('-f',dest='filename',metavar='filename',action='store',help='Specify the filename/location of your database.')
-        parser.add_argument('-j','--json', action='store_true', help='use json rather than the default SQLite database.')
-        parser.add_argument('-i','--interface',dest='interface',action='store',help='Specify the name of the interface you wish to monitor/throttle.')
+        parser.add_argument('interval',
+            metavar='interval',
+            type=int,
+            action='store',
+            help='Specify the monitoring interval in seconds. (min: 1, max: 60)')
+        parser.add_argument('-f','--filename',
+            dest='filename',
+            metavar='filename',
+            action='store',
+            help='Specify the filename/location of your database.')
+        parser.add_argument('-j','--json',
+            action='store_true',
+            help='use json rather than the default SQLite database.')
+        parser.add_argument('-i','--interface',
+            dest='interface',
+            metavar='interface',
+            action='store',
+            help='Specify the name of the interface you wish to monitor/throttle.')
+        parser.add_argument('-t','--timeout',
+            dest='timeout',
+            metavar='timeout',
+            type=int,
+            action='store',
+            help='''Specify the amount of time that will pass in seconds before connections
+            with the same ports and destination are considered new.''')
+        parser.add_argument('-a','--affinitize',
+            action='store_true',
+            help='Affinitize and optimize the system.')
+        parser.add_argument('-r','--throttle',
+            action='store_true',
+            help='Actively shape connections, rather than just collecting data.')
+        parser.add_argument('-v','--verbose',
+            action='store_true',
+            help='Don\'t summarize connections in the database.')
         # Process arguments
         args = parser.parse_args()
-        if args.json:
-            print 'json is on'
-        #interface = args.interface
-        pass
     except KeyboardInterrupt:
         print 'Operation Cancelled\n'
         return 0
@@ -582,17 +620,40 @@ USAGE
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
+    if not 0<args.interval<=60:
+        raise CLIError(Exception,'minimum interval is 1 second, maximum is 60 seconds')
+    interval = args.interval
+    if args.throttle and not args.interface:
+        raise CLIError(Exception,'Please supply an interface to throttle with the -i option.')
+
+    if args.throttle:
+        throttle = True
+    if args.interface:
+        interface = args.interface
+    if args.filename:
+        filename = args.filename
+    if args.json:
+        json = True
+    if args.timeout:
+        timeout = args.timeout
+    if args.affinitize:
+        affinitize = True
+    if args.verbose:
+        verbose = True
     dbinit()
-    #checkibalance()
-    #numcpus = pollcpu()
-    #print 'The number of cpus is:', numcpus
-    #irqlist = pollirq(interface)
-    #affinity = pollaffinity(irqlist)
-    #print affinity
-    #setaffinity(affinity,numcpus)
-    #linerate = getlinerate(interface)
-    #setthrottles(interface)
-    doconns()
+    if args.affinitize:
+        checkibalance()
+        numcpus = pollcpu()
+        print 'The number of cpus is:', numcpus
+        irqlist = pollirq(interface)
+        affinity = pollaffinity(irqlist)
+        print affinity
+        setaffinity(affinity,numcpus)
+    if args.interface:
+        linerate = getlinerate(args.interface)
+    if args.throttle:
+        setthrottles(interface)
+    doconns(args.interval)
 
 if __name__ == '__main__':
     if DEBUG:
