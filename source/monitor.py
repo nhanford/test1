@@ -303,7 +303,7 @@ def findiface(ip):
             dev = subprocess.check_output(['ip','-6','route','get',ip])
             dev = re.search('dev\s+\S+',dev).group(0).split()[1]
         except subprocess.CalledProcessError as e:
-            raise(CalledProcessError)
+            raise TCError(e,'unable to find interface for {}'.format(ip))
         return dev
     else:
         dev = subprocess.check_output(['ip','route','get',ip])
@@ -390,7 +390,10 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
             cnd=cwnd,
             retr=retrans,
             intv=intervals)
-    cur.execute(query)
+    try:
+        cur.execute(query)
+    except Exception as e:
+        raise DBError(e,'unable to insert {} into database'.format(query))
     return
 
 def dbupdateconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, retrans, iface, intervals, flownum):
@@ -420,7 +423,10 @@ def dbupdateconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cw
         cnd=cwnd,
         retr=retrans,
         intv=intervals)
-    cur.execute(query)
+    try:
+        cur.execute(query)
+    except Exception as e:
+        raise DBError(e,'could not update connection: )
     return
 
 def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
