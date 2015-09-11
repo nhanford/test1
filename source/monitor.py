@@ -250,8 +250,11 @@ def loadconnections(connections):
                     rtt = oldrtt
                 dbupdateconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,intervals,flownum)
                 numupdated +=1
-        except Exception as e:
-            raise DBError(e,'could not load connection into database:\n{}'.format(connection))
+        except as e:
+            print e
+            msg = '''could not load connection into database:{}'''.format(connection)
+            print msg
+            raise DBError(e,msg)
     conn.commit()
     conn.close()
     print '{numn} new connections loaded and {numu} connections updated at time {when}'.format(numn=numnew, numu=numupdated,
@@ -306,8 +309,11 @@ def findiface(ip):
             raise TCError(e,'unable to find interface for {}'.format(ip))
         return dev
     else:
-        dev = subprocess.check_output(['ip','route','get',ip])
-        dev = re.search('dev\s+\S+',dev).group(0).split()[1]
+        try:
+            dev = subprocess.check_output(['ip','route','get',ip])
+            dev = re.search('dev\s+\S+',dev).group(0).split()[1]
+        except subprocess.CalledProcessError as e:
+            raise TCError(e,'unable to find interface for {}'.format(ip))
         return dev
 
 def parseconnection(connection):
@@ -426,7 +432,7 @@ def dbupdateconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cw
     try:
         cur.execute(query)
     except Exception as e:
-        raise DBError(e,'could not update connection: )
+        raise DBError(e,'could not update connection:{}'.format(query))
     return
 
 def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
@@ -441,8 +447,11 @@ def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
         dip=destip,
         spo=sourceport,
         dpo=destport)
-    cur.execute(query)
-    out = cur.fetchall()
+    try:
+        cur.execute(query)
+        out = cur.fetchall()
+    except Exception as e:
+        raise DBError(e,'could not execute query {}'.format(query))
     if len(out)>0:
         return out[0][0]
     return -1
@@ -462,7 +471,10 @@ def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, update
             spo=sourceport,
             dip=str(destip),
             dpo=destport)
-    cur.execute(query)
+    try:
+        cur.execute(query)
+    except Exception as e:
+        raise DBError(e,'could not execute query {}'.format(query))
     return
 
 def dbinit():
@@ -493,7 +505,10 @@ def dbinit():
 
 def throttleoutgoing(iface,ipaddr,speedclass):
     '''throttles an outgoing flow'''
-    success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
+    try:
+        success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
+    except subprocess.CalledProcessError as e:
+        raise TCError(e,)
     return success
 
 def pollss():
