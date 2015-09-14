@@ -22,6 +22,7 @@ SPEEDCLASSES = [(800,'1:2',1000),(4500,'1:3',5000),(9500,'1:4',10000)]
 
 DEBUG = 0
 TESTRUN = 0
+SKIPAFFINITY = 1
 
 class CLIError(Exception):
     '''generic exception to raise and log different fatal errors'''
@@ -33,60 +34,14 @@ class CLIError(Exception):
     def __unicode__(self):
         return self.msg
 
-class ProcError(Exception):
-    '''
-    generic exception to raise and log errors from accessing procfs
-    These errors are fatal to the affinity tuning components and some monitoring components.
-    '''
-    def __init__(self, msg):
-        self.msg = 'E: {}'.format(msg)
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
-
-class DBError(Exception):
-    '''
-    generic exception to handle errors from the database
-    These errors may be fatal to the ability to record flow data.
-    '''
-    def __init__(self, msg):
-        self.msg = 'E: {}'.format(msg)
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
-
-class SSError(Exception):
-    '''
-    generic exception to handle errors from ss
-    These errors are fatal to the monitoring components.
-    '''
-    def __init__(self, msg):
-        self.msg = 'E: {}'.format(msg)
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
-
-class TCError(Exception):
-    '''
-    generic exception to handle errors from tc
-    These errors are fatal to the throttling components.
-    '''
-    def __init__(self, msg):
-        self.msg = 'E: {}'.format(msg)
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
-
 def checkibalance():
     '''attempts to disable irqbalance'''
     try:
         stat = subprocess.check_call(['service','irqbalance','stop'])
     except subprocess.CalledProcessError as e:
-        raise TCError(e,'Failed to stop irqbalance')
+        global SKIPAFFINITY = 0
+        if DEBUG or TESTRUN:
+            raise e
     return 0
 
 def pollcpu():
@@ -250,7 +205,7 @@ def loadconnections(connections):
                     rtt = oldrtt
                 dbupdateconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,intervals,flownum)
                 numupdated +=1
-        except as e:
+        except Exception as e:
             print e
             msg = '''could not load connection into database:{}'''.format(connection)
             print msg
