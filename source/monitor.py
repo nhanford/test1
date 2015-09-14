@@ -87,7 +87,8 @@ def checkibalance():
     try:
         stat = subprocess.check_call(['service','irqbalance','stop'])
     except subprocess.CalledProcessError as e:
-        global SKIPAFFINITY = 0
+        global SKIPAFFINITY
+        SKIPAFFINITY = 0
         if DEBUG or TESTRUN:
             raise TCError(e,'Failed to stop irqbalance')
     return 0
