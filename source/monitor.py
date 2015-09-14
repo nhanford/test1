@@ -16,7 +16,7 @@ import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct,
 __all__ = []
 __version__ = 0.8
 __date__ = '2015-06-22'
-__updated__ = '2015-09-01'
+__updated__ = '2015-09-14'
 
 SPEEDCLASSES = [(800,'1:2',1000),(4500,'1:3',5000),(9500,'1:4',10000)]
 
@@ -42,6 +42,7 @@ def checkibalance():
         global SKIPAFFINITY = 0
         if DEBUG or TESTRUN:
             raise e
+
     return 0
 
 def pollcpu():
