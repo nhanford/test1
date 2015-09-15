@@ -4,6 +4,8 @@
 monitor -- Monitors DTN flow data and stores the results in a sqlite database.
 
 monitor is designed for Ubuntu and CentOS Linux running Python 2.7
+Disclaimer: This is just "proof-of-concept" code. There is a much better way to
+do many of these functions.
 
 @author:     Nathan Hanford
 
@@ -11,7 +13,8 @@ monitor is designed for Ubuntu and CentOS Linux running Python 2.7
 @deffield    updated: Updated
 '''
 
-import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct,argparse,json
+import sys,os,re,subprocess,socket,sched,time,datetime,threading,sqlite3,struct
+import argparse,json,logging,warnings
 
 __all__ = []
 __version__ = 0.8
@@ -23,6 +26,11 @@ SPEEDCLASSES = [(800,'1:2',1000),(4500,'1:3',5000),(9500,'1:4',10000)]
 DEBUG = 0
 TESTRUN = 0
 SKIPAFFINITY = 1
+
+#Error Handling Philosophy: These are sort of placeholders for the impending
+#modularization of this monolithic script. This will be done to allow the
+#monitoring components to limp along, even if affinitization and throttling
+#aren't working.
 
 class CLIError(Exception):
     '''generic exception to raise and log different fatal errors'''
@@ -84,21 +92,14 @@ class TCError(Exception):
 
 def checkibalance():
     '''attempts to disable irqbalance'''
-    try:
-        stat = subprocess.check_call(['service','irqbalance','stop'])
-    except subprocess.CalledProcessError as e:
-        global SKIPAFFINITY
-        SKIPAFFINITY = 0
-        if DEBUG or TESTRUN:
-            raise TCError(e,'Failed to stop irqbalance')
+    stat = subprocess.check_call(['service','irqbalance','stop'])
+    global SKIPAFFINITY
+    SKIPAFFINITY = 0
     return 0
 
 def pollcpu():
     '''determines the number of cpus in the system'''
-    try:
-        pfile = open('/proc/cpuinfo','r')
-    except IOError as e:
-        raise ProcError(e,'Unable to read /proc/cpuinfo')
+    pfile = open('/proc/cpuinfo','r')
     numcpus=0
     for line in pfile:
         line.strip()
@@ -111,21 +112,15 @@ def pollaffinity(irqlist):
     '''determines the current affinity scenario'''
     affinity = dict()
     for i in irqlist:
-        try:
-            pfile = open('/proc/irq/{}/smp_affinity'.format(i),'r')
-        except IOError as e:
-            raise ProcError(e,'unable to read /proc/irq/{}/smp_affinity'.format(i))
+        pfile = open('/proc/irq/{}/smp_affinity'.format(i),'r')
         thisAffinity=pfile.read().strip()
         affinity[i]=thisAffinity
-    pfile.close()
+        pfile.close()
     return affinity
 
 def pollirq(iface):
     '''determines the irq numbers of the given interface'''
-    try:
-        irqfile = open('/proc/interrupts','r')
-    except IOError as e:
-        raise ProcError(e,'unable to read /proc/interrupts')
+    irqfile = open('/proc/interrupts','r')
     irqlist=[]
     for line in irqfile:
         line.strip()
@@ -164,32 +159,23 @@ def setaffinity(affy,numcpus):
         while len(strmask)<numdigits:
             strmask = '0'+strmask
         mask = mask << 1
-        try:
-            smp = open('/proc/irq/{}/smp_affinity'.format(key),'w')
-            smp.write(strmask)
-            smp.close()
-        except IOError as e:
-            raise ProcError(e,'Could not write /proc/irq/{}/smp_affinity'.format(key))
+        smp = open('/proc/irq/{}/smp_affinity'.format(key),'w')
+        smp.write(strmask)
+        smp.close()
         irqcount +=1
     return
 
 def setperformance(numcpus):
     '''sets all cpus to performance mode'''
     for i in range(numcpus):
-        try:
-            throttle = open('/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor'.format(i), 'w')
-            throttle.write('performance')
-            throttle.close()
-        except IOError as e:
-            raise ProcError(e, 'Could not write to /sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor'.format(i))
+        throttle = open('/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor'.format(i), 'w')
+        throttle.write('performance')
+        throttle.close()
     return
 
 def getlinerate(iface):
     '''uses ethtool to determine the linerate of the selected interface'''
-    try:
-        out = subprocess.check_output(['ethtool',iface])
-    except subprocess.CalledProcessError as e:
-        raise TCError(e,'Could not get linerate for {}'.format(iface))
+    out = subprocess.check_output(['ethtool',iface])
     speed = re.search('.+Speed:.+',out)
     speed = re.sub('.+Speed:\s','',speed.group(0))
     speed = re.sub('Mb/s','',speed)
@@ -202,19 +188,14 @@ def setthrottles(iface):
     try:
         stat = subprocess.check_call(['tc','qdisc','del','dev',iface,'root'])
     except subprocess.CalledProcessError as e:
+        #Might get here because there is no root qdisc...
         if e.returncode != 2:
-            raise TCError(e,'Could not execute qdisc management on {}'.format(iface))
-    try:
-        subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root','htb'])
-    except subprocess.CalledProcessError as e:
-        raise TCError(e,'Could not add root qdisc for {}'.format(iface))
+            raise e
+    subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root','htb'])
     for speedclass in SPEEDCLASSES:
         print speedclass[0]
         print speedclass[1]
-        try:
-            subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
-        except subprocess.CalledProcessError as e:
-            raise TCError(e,'could not add class {s} for interface {i}'.format(s=speedclass[2],i=iface))
+        subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
     return
 
 def loadconnections(connections):
@@ -223,24 +204,26 @@ def loadconnections(connections):
     c = conn.cursor()
     numnew,numupdated = 0,0
     for connection in connections:
-        try:
-            ips, ports, rtt, wscaleavg, cwnd, retrans = parseconnection(connection)
-            if rtt<0:
-                print connection,'had an invalid rtt.'
-            if wscaleavg<0:
-                print connection,'had an invalid wscaleavg.'
-            if cwnd<0:
-                print connection,'had an invalid cwnd.'
-            if retrans<0:
-                print connection,'had an invalid retrans.'
-            iface = findiface(ips[1])
-        except ValueError:
-            #connection was empty: usually localhost<-->localhost
+        ips, ports, rtt, wscaleavg, cwnd, retrans = parseconnection(connection)
+        if rtt<0:
+            logging.warning(connection+' had an invalid rtt.')
             continue
+        if wscaleavg<0:
+            logging.warning(connection+' had an invalid wscaleavg.')
+            continue
+        if cwnd<0:
+            logging.warning(connection+' had an invalid cwnd.')
+            continue
+        if retrans<0:
+            #see if parsetcp will handle it
+            logging.warning(connection+' had an invalid retrans.')
+        iface = findiface(ips[1])
         try:
             dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,0,0)
             numnew +=1
         except sqlite3.IntegrityError:
+            #We already have it in the database
+            #I'm looking for a way to do this in one query in SQLite
             flownum,recent = dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1])
             if not recent:
                 flownum+=1
@@ -254,15 +237,10 @@ def loadconnections(connections):
                     rtt = oldrtt
                 dbupdateconn(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,intervals,flownum)
                 numupdated +=1
-        except Exception as e:
-            print e
-            msg = '''could not load connection into database:{}'''.format(connection)
-            print msg
-            raise DBError(e,msg)
     conn.commit()
     conn.close()
-    print '{numn} new connections loaded and {numu} connections updated at time {when}'.format(numn=numnew, numu=numupdated,
-        when=datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%s'))
+    logging.info('{numn} new connections loaded and {numu} connections updated at time {when}'.format(numn=numnew, numu=numupdated,
+        when=datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%s')))
     return
 
 def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
@@ -278,11 +256,8 @@ def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
             dip=destip,
             spo=sourceport,
             dpo=destport)
-    try:
-        cur.execute(query)
-        out = cur.fetchall()
-    except Exception as e:
-        raise DBError(e,'query {} failed'.format(query))
+    cur.execute(query)
+    out = cur.fetchall()
     if len(out)>0:
         return int(out[0][0]), True
     else:
@@ -294,70 +269,65 @@ def isip6(ip):
         socket.inet_aton(ip)
         return False
     except socket.error:
-        try:
-            socket.inet_pton(socket.AF_INET6,ip)
-            return True
-        except socket.error:
-            return -1
+        socket.inet_pton(socket.AF_INET6,ip)
+        return True
 
 def findiface(ip):
     '''determines the interface responsible for a particular ip address'''
     ip6 = isip6(ip)
     if ip6 == -1:
+        #Propagating falsehoods...
         return -1
     elif ip6:
-        try:
-            dev = subprocess.check_output(['ip','-6','route','get',ip])
-            dev = re.search('dev\s+\S+',dev).group(0).split()[1]
-        except subprocess.CalledProcessError as e:
-            raise TCError(e,'unable to find interface for {}'.format(ip))
+        dev = subprocess.check_output(['ip','-6','route','get',ip])
+        dev = re.search('dev\s+\S+',dev).group(0).split()[1]
         return dev
     else:
-        try:
-            dev = subprocess.check_output(['ip','route','get',ip])
-            dev = re.search('dev\s+\S+',dev).group(0).split()[1]
-        except subprocess.CalledProcessError as e:
-            raise TCError(e,'unable to find interface for {}'.format(ip))
+        dev = subprocess.check_output(['ip','route','get',ip])
+        dev = re.search('dev\s+\S+',dev).group(0).split()[1]
         return dev
 
 def parseconnection(connection):
-    connection = connection.strip()
-    ordered = re.sub(':|,|/|Mbps',' ',connection)
-    ordered = connection.split()
-    ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
-    ports = re.findall('\d:\w+',connection)
-    rtt = re.search('rtt:\d+[.]?\d+',connection)
+    '''parses a string representing a single TCP connection'''
+    #Junk gets filtered in @loadconnections
+    try:
+        connection = connection.strip()
+        ordered = re.sub(':|,|/|Mbps',' ',connection)
+        ordered = connection.split()
+        ips = re.findall('\d+\.\d+\.\d+\.\d+',connection)
+        ports = re.findall('\d:\w+',connection)
+        rtt = re.search('rtt:\d+[.]?\d+',connection)
+        wscaleavg = re.search('wscale:\d+',connection)
+        cwnd = re.search('cwnd:\d+',connection)
+        retrans = re.search('retrans:\d+\/\d+',connection)
+    except Exception as e:
+        if TEST or DEBUG:
+            raise e
+        logging.warning('connection {} could not be parsed'.format(connection))
+        return -1,-1,-1,-1,-1,-1
     if rtt:
         rtt = float(rtt.group(0)[4:])
     else:
-        rtt = '-1'
-    wscaleavg = re.search('wscale:\d+',connection)
+        rtt = -1
     if wscaleavg:
         wscaleavg = wscaleavg.group(0)[7:]
     else:
-        wscaleavg = '-1'
-    cwnd = re.search('cwnd:\d+',connection)
+        wscaleavg = -1
     if cwnd:
         cwnd = cwnd.group(0)[5:]
     else:
-        cwnd = '-1'
-    retrans = re.search('retrans:\d+\/\d+',connection)
+        cwnd = -1
     if retrans:
         retrans = retrans.group(0)
         retrans = re.sub('retrans:\d+\/','',retrans)
     else:
-        retrans = '0'
-    #sendrate = re.search('send \d+.\d+[A-z]',connection)
-    #if sendrate:
-    #    sendrate = sendrate.group(0)[5:]
-    #else:
-    #    sendrate = '-1'
+        retrans = -1
     if len(ips) > 1 and len(ports) > 1 and rtt and wscaleavg and cwnd and retrans:
         ports[0] = ports[0][2:]
         ports[1] = ports[1][2:]
         return ips, ports, rtt, wscaleavg, cwnd, retrans
-    else:
-        raise ValueError('Not enough values to search.')
+    logging.warning('connection {} could not be parsed'.format(connection))
+    return -1,-1,-1,-1,-1,-1
 
 def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, retrans, iface, intervals, flownum):
     '''assembles a query and creates a corresponding row in the database'''
@@ -400,43 +370,62 @@ def dbinsert(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, 
             cnd=cwnd,
             retr=retrans,
             intv=intervals)
-    try:
-        cur.execute(query)
-    except Exception as e:
-        raise DBError(e,'unable to insert {} into database'.format(query))
+    cur.execute(query)
     return
 
 def dbupdateconn(cur, sourceip, destip, sourceport, destport, rtt, wscaleavg, cwnd, retrans, iface, intervals, flownum):
     '''assembles a query and updates the corresponding row in the database'''
-    query = '''UPDATE conns SET
-    iface = \'{ifa}\',
-    rttavg = {rt},
-    wscaleavg = {wsc},
-    cwnd = {cnd},
-    retrans = {retr},
-    intervals = {intv},
-    modified = datetime(CURRENT_TIMESTAMP)
-    WHERE
-    sourceip = \'{sip}\' AND
-    destip = \'{dip}\' AND
-    sourceport = {spo} AND
-    destport = {dpo} AND
-    flownum = {fnm}'''.format(
-        sip=sourceip,
-        dip=destip,
-        spo=sourceport,
-        dpo=destport,
-        fnm=flownum,
-        ifa=iface,
-        rt=rtt,
-        wsc=wscaleavg,
-        cnd=cwnd,
-        retr=retrans,
-        intv=intervals)
-    try:
-        cur.execute(query)
-    except Exception as e:
-        raise DBError(e,'could not update connection:{}'.format(query))
+    if retrans == -1: #don't update it: let parsetcp take care of it.
+        query = '''UPDATE conns SET
+        iface = \'{ifa}\',
+        rttavg = {rt},
+        wscaleavg = {wsc},
+        cwnd = {cnd},
+        intervals = {intv},
+        modified = datetime(CURRENT_TIMESTAMP)
+        WHERE
+        sourceip = \'{sip}\' AND
+        destip = \'{dip}\' AND
+        sourceport = {spo} AND
+        destport = {dpo} AND
+        flownum = {fnm}'''.format(
+            sip=sourceip,
+            dip=destip,
+            spo=sourceport,
+            dpo=destport,
+            fnm=flownum,
+            ifa=iface,
+            rt=rtt,
+            wsc=wscaleavg,
+            cnd=cwnd,
+            intv=intervals)
+    else:
+        query = '''UPDATE conns SET
+        iface = \'{ifa}\',
+        rttavg = {rt},
+        wscaleavg = {wsc},
+        cwnd = {cnd},
+        retrans = {retr},
+        intervals = {intv},
+        modified = datetime(CURRENT_TIMESTAMP)
+        WHERE
+        sourceip = \'{sip}\' AND
+        destip = \'{dip}\' AND
+        sourceport = {spo} AND
+        destport = {dpo} AND
+        flownum = {fnm}'''.format(
+            sip=sourceip,
+            dip=destip,
+            spo=sourceport,
+            dpo=destport,
+            fnm=flownum,
+            ifa=iface,
+            rt=rtt,
+            wsc=wscaleavg,
+            cnd=cwnd,
+            retr=retrans,
+            intv=intervals)
+    cur.execute(query)
     return
 
 def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
@@ -451,11 +440,8 @@ def dbselectval(cur, sourceip, destip, sourceport, destport, selectfield):
         dip=destip,
         spo=sourceport,
         dpo=destport)
-    try:
-        cur.execute(query)
-        out = cur.fetchall()
-    except Exception as e:
-        raise DBError(e,'could not execute query {}'.format(query))
+    cur.execute(query)
+    out = cur.fetchall()
     if len(out)>0:
         return out[0][0]
     return -1
@@ -475,10 +461,7 @@ def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, update
             spo=sourceport,
             dip=str(destip),
             dpo=destport)
-    try:
-        cur.execute(query)
-    except Exception as e:
-        raise DBError(e,'could not execute query {}'.format(query))
+    cur.execute(query)
     return
 
 def dbinit():
@@ -509,10 +492,7 @@ def dbinit():
 
 def throttleoutgoing(iface,ipaddr,speedclass):
     '''throttles an outgoing flow'''
-    try:
-        success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
-    except subprocess.CalledProcessError as e:
-        raise TCError(e,)
+    success = subprocess.check_call(['tc','filter','add',iface,'parent','1:','protocol','ip','prio','1','u32','match','ip','dst',ipaddr+'/32','flowid',speedclass[1]])
     return success
 
 def pollss():
@@ -529,6 +509,7 @@ def polltcp():
     out = tcp.readlines()
     out = out[1:]
     tcp.close()
+    #IPv6 support
     #tcp6 = open('/proc/net/tcp6','r')
     #out6 = tcp6.readlines()
     #out6 = out6[1:]
@@ -557,9 +538,11 @@ def parsetcp(connections):
             destip = socket.inet_ntoa(destip)
             destport = int(destport,16)
             retrans = int(connection[6],16)
+            print retrans
             tempretr = int(dbselectval(c,sourceip,destip,sourceport,destport,'retrans'))
-            retrans += tempretr
-            dbupdateval(c,sourceip, destip, sourceport, destport, 'retrans',retrans)
+            if tempretr >= 0:
+                retrans += tempretr
+            dbupdateval(c,sourceip, destip, sourceport, destport,'retrans',retrans)
     conn.commit()
     conn.close()
 
@@ -572,15 +555,14 @@ def doconns(interval):
     threading.Timer(interval, doconns, [interval]).start()
     return
 
-def checkfile(parser,fname):
-    if not os.path.exists(fname):
-        parser.error('File {} doesn\'t exist'.format(fname))
-    else:
-        return open(fname,'rw')
-
 def main(argv=None): # IGNORE:C0111
     '''Command line options.'''
-
+    if DEBUG:
+        _level = logging.DEBUG
+    else:
+        _level = logging.INFO
+    logging.basicConfig(filename='monitor.log',level=_level)
+    logging.info('Configured and running.')
     if argv is None:
         argv = sys.argv
     else:
@@ -638,7 +620,7 @@ USAGE
     except KeyboardInterrupt:
         print 'Operation Cancelled\n'
         return 0
-    except Exception, e:
+    except Exception as e:
         if DEBUG or TESTRUN:
             raise(e)
         indent = len(program_name) * ' '
@@ -657,6 +639,9 @@ USAGE
         interface = args.interface
     if args.filename:
         filename = args.filename
+####################################################### left off here
+        try:
+            f = open()
     if args.json:
         json = True
     if args.timeout:
