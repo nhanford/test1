@@ -24,7 +24,7 @@ __updated__ = '2015-09-14'
 SPEEDCLASSES = [(800,'1:2',1000),(4500,'1:3',5000),(9500,'1:4',10000)]
 
 DEBUG = 0
-TESTRUN = 0
+TESTRUN = 1
 SKIPAFFINITY = 1
 
 #Error Handling Philosophy: These are sort of placeholders for the impending
@@ -193,14 +193,12 @@ def setthrottles(iface):
             raise e
     subprocess.check_call(['tc','qdisc','add','dev',iface,'handle','1:','root','htb'])
     for speedclass in SPEEDCLASSES:
-        print speedclass[0]
-        print speedclass[1]
         subprocess.check_call(['tc','class','add','dev',iface,'parent','1:','classid',speedclass[1],'htb','rate',str(speedclass[0])+'mbit'])
     return
 
-def loadconnections(connections):
+def loadconnections(connections,filename,timeout,verbose):
     '''oversees pushing the connections into the database'''
-    conn = conn = sqlite3.connect('connections.db')
+    conn = conn = sqlite3.connect(filename)
     c = conn.cursor()
     numnew,numupdated = 0,0
     for connection in connections:
@@ -224,7 +222,7 @@ def loadconnections(connections):
         except sqlite3.IntegrityError:
             #We already have it in the database
             #I'm looking for a way to do this in one query in SQLite
-            flownum,recent = dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1])
+            flownum,recent = dbcheckrecent(c,ips[0],ips[1],ports[0],ports[1],timeout)
             if not recent:
                 flownum+=1
                 dbinsert(c,ips[0],ips[1],ports[0],ports[1],rtt,wscaleavg,cwnd,retrans,iface,0,flownum)
@@ -243,19 +241,20 @@ def loadconnections(connections):
         when=datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%s')))
     return
 
-def dbcheckrecent(cur, sourceip, destip, sourceport, destport):
+def dbcheckrecent(cur, sourceip, destip, sourceport, destport, timeout):
     '''checks to see if this flow has been recently seen'''
     query = '''SELECT flownum FROM conns WHERE
         sourceip = \'{sip}\' AND
         destip = \'{dip}\' AND
         sourceport = {spo} AND
         destport = {dpo} AND
-        strftime('%s', datetime('now')) - strftime('%s', modified) <= 30
+        strftime('%s', datetime('now')) - strftime('%s', modified) <= {to}
         ORDER BY flownum DESC LIMIT 1'''.format(
             sip=sourceip,
             dip=destip,
             spo=sourceport,
-            dpo=destport)
+            dpo=destport,
+            to=timeout)
     cur.execute(query)
     out = cur.fetchall()
     if len(out)>0:
@@ -464,14 +463,14 @@ def dbupdateval(cur, sourceip, destip, sourceport, destport, updatefield, update
     cur.execute(query)
     return
 
-def dbinit():
+def dbinit(filename):
     '''initializes the database and creates the table, if one doesn't exist already'''
-    conn = sqlite3.connect('connections.db')
+    conn = sqlite3.connect(filename)
     c = conn.cursor()
     try:
         c.execute('''SELECT * FROM conns''')
     except sqlite3.OperationalError:
-        print 'Table doesn\'t exist; Creating table...'
+        logging.warning('Table doesn\'t exist; Creating table...')
         c.execute('''CREATE TABLE conns (
             sourceip    text    NOT NULL,
             destip      text    NOT NULL,
@@ -517,9 +516,9 @@ def polltcp():
     #out += out6
     return out
 
-def parsetcp(connections):
+def parsetcp(connections,filename):
     '''parses the data from /proc/net/tcp'''
-    conn = sqlite3.connect('connections.db')
+    conn = sqlite3.connect(filename)
     c = conn.cursor()
     for connection in connections:
         connection = connection.strip()
@@ -538,21 +537,24 @@ def parsetcp(connections):
             destip = socket.inet_ntoa(destip)
             destport = int(destport,16)
             retrans = int(connection[6],16)
-            print retrans
             tempretr = int(dbselectval(c,sourceip,destip,sourceport,destport,'retrans'))
-            if tempretr >= 0:
+            if tempretr > 0:
                 retrans += tempretr
             dbupdateval(c,sourceip, destip, sourceport, destport,'retrans',retrans)
     conn.commit()
     conn.close()
 
-def doconns(interval):
+def doconns(interval,filename,json,timeout,verbose):
     '''manages the periodic collection of ss and procfs data'''
     connections = pollss()
-    loadconnections(connections)
     tcpconns = polltcp()
-    parsetcp(tcpconns)
-    threading.Timer(interval, doconns, [interval]).start()
+    if json:
+        pass
+    else:
+        loadconnections(connections,filename,timeout,verbose)
+        parsetcp(tcpconns,filename)
+    logging.info('successful interval')
+    threading.Timer(interval, doconns, [interval,filename,json,timeout,verbose]).start()
     return
 
 def main(argv=None): # IGNORE:C0111
@@ -561,7 +563,12 @@ def main(argv=None): # IGNORE:C0111
         _level = logging.DEBUG
     else:
         _level = logging.INFO
-    logging.basicConfig(filename='monitor.log',level=_level)
+    logging.basicConfig(filename='monitor.log',format='%(asctime)s %(message)s',level=_level)
+    #Setting defaults
+    filename = 'connections.db'
+    json = None
+    timeout = 30
+    verbose=False
     logging.info('Configured and running.')
     if argv is None:
         argv = sys.argv
@@ -590,15 +597,17 @@ USAGE
             dest='filename',
             metavar='filename',
             action='store',
-            help='Specify the filename/location of your database.')
+            help='Specify the filename/location of your SQLite database.')
         parser.add_argument('-j','--json',
-            action='store_true',
-            help='use json rather than the default SQLite database.')
+            dest='json',
+            metavar='json',
+            action='store',
+            help='Future: Specify the folder where you would like to write out the JSON BLOB(s).')
         parser.add_argument('-i','--interface',
             dest='interface',
             metavar='interface',
             action='store',
-            help='Specify the name of the interface you wish to monitor/throttle.')
+            help='Future: Specify the name of the interface you wish to monitor/throttle.')
         parser.add_argument('-t','--timeout',
             dest='timeout',
             metavar='timeout',
@@ -617,40 +626,44 @@ USAGE
             help='Don\'t summarize connections in the database.')
         # Process arguments
         args = parser.parse_args()
+        if not 0<args.interval<=60:
+            raise CLIError('minimum interval is 1 second, maximum is 60 seconds')
+        interval = args.interval
+        if args.throttle and not args.interface:
+            raise CLIError('Please supply an interface to throttle with the -i option.')
+        if args.timeout:
+            timeout = args.timeout
+        if timeout < interval:
+            raise CLIError('Timeout cannot be less than an interval.')
     except KeyboardInterrupt:
         print 'Operation Cancelled\n'
         return 0
     except Exception as e:
         if DEBUG or TESTRUN:
+            print 'debug or testrun was set'
             raise(e)
         indent = len(program_name) * ' '
         sys.stderr.write(program_name + ': ' + repr(e) + '\n')
         sys.stderr.write(indent + '  for help use --help'+'\n')
         return 2
-    if not 0<args.interval<=60:
-        raise CLIError(Exception,'minimum interval is 1 second, maximum is 60 seconds')
-    interval = args.interval
-    if args.throttle and not args.interface:
-        raise CLIError(Exception,'Please supply an interface to throttle with the -i option.')
-
     if args.throttle:
         throttle = True
     if args.interface:
         interface = args.interface
     if args.filename:
         filename = args.filename
-####################################################### left off here
-        try:
-            f = open()
     if args.json:
-        json = True
+        if os.path.isdir(json):
+            json = args.json
+        else:
+            raise CLIError('Please enter a valid directory for JSON output.')
     if args.timeout:
         timeout = args.timeout
     if args.affinitize:
         affinitize = True
     if args.verbose:
         verbose = True
-    dbinit()
+    dbinit(filename)
     if args.affinitize:
         checkibalance()
         numcpus = pollcpu()
@@ -663,7 +676,8 @@ USAGE
         linerate = getlinerate(args.interface)
     if args.throttle:
         setthrottles(interface)
-    doconns(args.interval)
+    doconns(interval,filename,json,timeout,verbose)
+    logging.shutdown()
 
 if __name__ == '__main__':
     if DEBUG:
